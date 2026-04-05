@@ -25,9 +25,9 @@
 #include <chrono>
 
 // external
-#include <external/zdraw/zui/zui.hpp>
-#include <external/poly2d.hpp>
-#include <external/xorstr.hpp>
+#include <ext/zdraw/zui/zui.hpp>
+#include <ext/poly2d.hpp>
+#include <ext/xorstr.hpp>
 
 // resources
 #include <resources/fonts/mochi.hpp>
