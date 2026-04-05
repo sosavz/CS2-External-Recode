@@ -46,7 +46,7 @@
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <ControlFlowGuard>Guard</ControlFlowGuard>
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalOptions>/experimental:deterministic /pathmap:"$(ProjectDir)=." %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/experimental:deterministic /pathmap:"$(ProjectDir)=/project/" /pathmap:"$(IntDir)=/int/" /pathmap:"$(OutDir)=/out/" %(AdditionalOptions)</AdditionalOptions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -68,6 +68,7 @@
       <HighEntropyVA>true</HighEntropyVA>
       <ControlFlowGuard>Guard</ControlFlowGuard>
       <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
+      <AdditionalOptions>/ignore:4099 %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
