@@ -30,24 +30,24 @@
 #include <ext/xorstr.hpp>
 
 // resources
-#include <resources/fonts/mochi.hpp>
-#include <resources/fonts/pixel7.hpp>
-#include <resources/fonts/pretzel.hpp>
-#include <resources/fonts/weapons.hpp>
+#include <Res/fonts/mochi.hpp>
+#include <Res/fonts/pixel7.hpp>
+#include <Res/fonts/pretzel.hpp>
+#include <Res/fonts/weapons.hpp>
 
 // utilities
-#include <utilities/animation/animation.hpp>
-#include <utilities/console/console.hpp>
-#include <utilities/input/input.hpp>
-#include <utilities/memory/memory.hpp>
-#include <utilities/math/math.hpp>
-#include <utilities/modules/modules.hpp>
-#include <utilities/offsets/offsets.hpp>
-#include <utilities/timing/timing.hpp>
-#include <utilities/diagnostics/diagnostics.hpp>
-#include <utilities/cstypes.hpp>
-#include <utilities/fnv1a.hpp>
-#include <utilities/random.hpp>
+#include <utils/animation/animation.hpp>
+#include <utils/console/console.hpp>
+#include <utils/input/input.hpp>
+#include <utils/memory/memory.hpp>
+#include <utils/math/math.hpp>
+#include <utils/modules/modules.hpp>
+#include <utils/offsets/offsets.hpp>
+#include <utils/timing/timing.hpp>
+#include <utils/diagnostics/diagnostics.hpp>
+#include <utils/cstypes.hpp>
+#include <utils/fnv1a.hpp>
+#include <utils/random.hpp>
 
 // core
 #include <core/settings.hpp>

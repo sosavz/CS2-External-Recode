@@ -53,7 +53,7 @@ namespace jm {
 		XORSTR_FORCEINLINE constexpr std::uint32_t key4( ) noexcept
 		{
 			std::uint32_t value = Seed;
-			for ( char c : __TIME__ )
+			for ( char c : "00:00:00" )
 				value = static_cast< std::uint32_t >( ( value ^ c ) * 16777619ull );
 			return value;
 		}
