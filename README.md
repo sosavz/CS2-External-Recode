@@ -1,29 +1,33 @@
 # CS2 External Recode
 
-## Overview
-This repository contains a C++ Visual Studio project for external experimentation around Counter-Strike 2 data access and rendering pipelines.
+## What This Project Is
+CS2 External Recode is a C++ external project structured around modular systems for:
+- entity/data collection
+- rendering and menu/UI
+- feature logic
+- shared utilities (math, memory, timing, input, diagnostics)
 
-The codebase is organized as an engine-style project with modular systems for:
-- configuration and settings
-- rendering and UI
-- math, memory, and module utilities
-- feature and system orchestration
+## Project Layout
+- `source/velora.vcxproj` Visual Studio project file
+- `source/project/core/` core systems, features, render, menu, threads
+- `source/project/utils/` utility modules
+- `source/project/ext/` third-party/external dependencies
+- `source/project/Res/` embedded resources (fonts/assets)
 
-## Project Structure
-- `source/project/core/` main systems, features, rendering, threading, and menu logic
-- `source/project/utils/` low-level helpers (math, memory, diagnostics, timing, input)
-- `source/project/ext/` third-party and external support code
-- `source/project/Res/` embedded resources (fonts and related assets)
+## Requirements
+- Windows
+- Visual Studio 2022 with C++ desktop development tools
 
 ## Build
-1. Open `source/velora.vcxproj` in Visual Studio (Windows).
-2. Select your desired `Debug` or `Release` configuration.
-3. Build the solution.
+1. Open `source/velora.vcxproj` in Visual Studio.
+2. Select configuration (`Debug` or `Release`) and target platform (`x64`).
+3. Build the project.
 
-## Privacy and Repository Hygiene
-- Local build outputs and generated IDE artifacts are ignored via `.gitignore`.
-- No API keys, tokens, or credential files should be committed.
-- If you accidentally commit sensitive data, rotate secrets first, then purge git history.
+## How To Use
+1. Build the project to generate the binary.
+2. Run the compiled executable from your build output folder.
+3. Configure options through the in-project menu/config system.
 
-## Disclaimer
-Use this project responsibly and in compliance with all applicable game, platform, and legal policies.
+## Configuration
+- Main config logic is under `source/project/core/config/`.
+- Feature and system toggles are managed in `source/project/core/settings.hpp` and related feature modules.
