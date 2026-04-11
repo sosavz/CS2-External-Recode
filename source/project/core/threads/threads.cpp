@@ -1,4 +1,5 @@
 #include <stdafx.hpp>
+#include <core\perf\perf.hpp>
 
 namespace threads {
 
@@ -55,9 +56,11 @@ namespace threads {
 
 			if ( systems::g_local.valid( ) )
 			{
+				perf::profiler::get( ).begin_module( "Entity Loop" );
 				systems::g_view.update( );
 				systems::g_entities.refresh( );
 				systems::g_collector.run( );
+				perf::profiler::get( ).end_module( "Entity Loop" );
 
 				const auto global_vars = g::memory.read<std::uintptr_t>( g::offsets.global_vars );
 				if ( global_vars )
@@ -85,7 +88,7 @@ namespace threads {
 				}
 			}
 
-			std::this_thread::yield( );
+			std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
 		}
 	}
 
@@ -117,12 +120,12 @@ namespace threads {
 
 			dead_streak = 0;
 
-			systems::g_local.update( );
-
 			if ( systems::g_local.valid( ) )
 			{
+				perf::profiler::get( ).begin_module( "Combat" );
 				features::combat::g_shared.tick( );
 				features::combat::g_legit.tick( );
+				perf::profiler::get( ).end_module( "Combat" );
 			}
 
 			next_tick += tick_interval;
@@ -134,12 +137,7 @@ namespace threads {
 				continue;
 			}
 
-			std::this_thread::sleep_until( next_tick - std::chrono::milliseconds( 1 ) );
-
-			while ( std::chrono::steady_clock::now( ) < next_tick )
-			{
-				_mm_pause( );
-			}
+			std::this_thread::sleep_until( next_tick );
 		}
 	}
 

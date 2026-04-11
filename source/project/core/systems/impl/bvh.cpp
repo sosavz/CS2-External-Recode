@@ -73,7 +73,10 @@ namespace systems {
 			}
 
 			std::vector<std::uint8_t> bvh_buf( static_cast< std::size_t >( node_count ) * k_inner_node_size );
-			g::memory.read( bvh_ptr, bvh_buf.data( ), bvh_buf.size( ) );
+			if ( !g::memory.read( bvh_ptr, bvh_buf.data( ), bvh_buf.size( ) ) )
+			{
+				return false;
+			}
 
 			std::uint32_t min_tri = UINT32_MAX, max_tri = 0;
 			std::vector<std::pair<std::uint32_t, std::uint32_t>> ranges;
@@ -160,7 +163,10 @@ namespace systems {
 			}
 
 			std::vector<std::int32_t> indices( total_tris * 3 );
-			g::memory.read( tri_ptr + static_cast< std::uintptr_t >( min_tri ) * 12, indices.data( ), total_tris * 12 );
+			if ( !g::memory.read( tri_ptr + static_cast< std::uintptr_t >( min_tri ) * 12, indices.data( ), total_tris * 12 ) )
+			{
+				return false;
+			}
 
 			std::int32_t max_vert{ 0 };
 			for ( const auto idx : indices )
@@ -178,7 +184,10 @@ namespace systems {
 
 			const auto vert_count = static_cast< std::uint32_t >( max_vert + 1 );
 			std::vector<float> vertices( vert_count * 3 );
-			g::memory.read( vert_ptr, vertices.data( ), static_cast< std::size_t >( vert_count ) * 12 );
+			if ( !g::memory.read( vert_ptr, vertices.data( ), static_cast< std::size_t >( vert_count ) * 12 ) )
+			{
+				return false;
+			}
 
 			const bool has_materials = mat_arr_ptr > 0x10000 && mat_count > 0;
 			std::vector<std::uint8_t> materials;
@@ -186,7 +195,10 @@ namespace systems {
 			if ( has_materials )
 			{
 				materials.resize( total_tris );
-				g::memory.read( mat_arr_ptr + static_cast< std::uintptr_t >( min_tri ), materials.data( ), total_tris );
+				if ( !g::memory.read( mat_arr_ptr + static_cast< std::uintptr_t >( min_tri ), materials.data( ), total_tris ) )
+				{
+					return false;
+				}
 			}
 
 			const auto global_count = static_cast< int >( global_table.size( ) );
@@ -248,7 +260,10 @@ namespace systems {
 			}
 
 			std::uint8_t hd[ 0x100 ]{};
-			g::memory.read( hull_data, hd, sizeof( hd ) );
+			if ( !g::memory.read( hull_data, hd, sizeof( hd ) ) )
+			{
+				return false;
+			}
 
 			const auto vert_count = *reinterpret_cast< const std::int32_t* >( hd + 0x88 );
 			const auto vert_ptr = *reinterpret_cast< const std::uintptr_t* >( hd + 0x90 );
@@ -278,13 +293,22 @@ namespace systems {
 			}
 
 			std::vector<float> verts( vert_count * 3 );
-			g::memory.read( vert_ptr, verts.data( ), static_cast< std::size_t >( vert_count ) * 12 );
+			if ( !g::memory.read( vert_ptr, verts.data( ), static_cast< std::size_t >( vert_count ) * 12 ) )
+			{
+				return false;
+			}
 
 			std::vector<hedge_t> hedges( hedge_count );
-			g::memory.read( hedge_ptr, hedges.data( ), static_cast< std::size_t >( hedge_count ) * 4 );
+			if ( !g::memory.read( hedge_ptr, hedges.data( ), static_cast< std::size_t >( hedge_count ) * 4 ) )
+			{
+				return false;
+			}
 
 			std::vector<std::uint8_t> faces( face_count );
-			g::memory.read( face_ptr, faces.data( ), face_count );
+			if ( !g::memory.read( face_ptr, faces.data( ), face_count ) )
+			{
+				return false;
+			}
 
 			const auto before = out.size( );
 
@@ -442,6 +466,10 @@ namespace systems {
 	void bvh::parse( )
 	{
 		const auto trace_against_entities_call = g::memory.find_pattern( g::modules.client, "E8 ? ? ? ? C7 87 ? ? ? ? ? ? ? ? 48 8D 54 24 ? 48 8B CF" );
+		if ( !trace_against_entities_call )
+		{
+			return;
+		}
 		const auto vphys2_world_global = g::memory.read<std::uintptr_t>( g::memory.resolve_rip( trace_against_entities_call - 0x1a ) );
 		const auto vphys2_world = g::memory.read<std::uintptr_t>( vphys2_world_global );
 
@@ -451,6 +479,10 @@ namespace systems {
 		}
 
 		const auto get_surface_data_from_handle_fn = g::memory.find_pattern( g::modules.client, "48 63 41 ? 48 8B 0D" );
+		if ( !get_surface_data_from_handle_fn )
+		{
+			return;
+		}
 		const auto surface_manager = g::memory.read<std::uintptr_t>( g::memory.resolve_rip( get_surface_data_from_handle_fn + 4 ) );
 
 		if ( !surface_manager )
@@ -480,7 +512,10 @@ namespace systems {
 					for ( int i = 0; i < 1024; ++i )
 					{
 						global_surface_entry sd{};
-						g::memory.read( array_base + static_cast< std::size_t >( i ) * 32, &sd, sizeof( sd ) );
+						if ( !g::memory.read( array_base + static_cast< std::size_t >( i ) * 32, &sd, sizeof( sd ) ) )
+						{
+							break;
+						}
 
 						if ( sd.penetration_mod == 0.0f && sd.surface_type == 0 && sd.unk_00 == 0.0f )
 						{
@@ -499,7 +534,10 @@ namespace systems {
 				if ( surface_count )
 				{
 					global_table.resize( surface_count );
-					g::memory.read( array_base, global_table.data( ), static_cast< std::size_t >( surface_count ) * sizeof( global_surface_entry ) );
+					if ( !g::memory.read( array_base, global_table.data( ), static_cast< std::size_t >( surface_count ) * sizeof( global_surface_entry ) ) )
+					{
+						global_table.clear( );
+					}
 				}
 			}
 		}
@@ -563,7 +601,10 @@ namespace systems {
 				}
 
 				std::vector<std::uint8_t> outer_buf( outer_node_count * detail::k_outer_node_size );
-				g::memory.read( bvh_nodes_ptr, outer_buf.data( ), outer_buf.size( ) );
+				if ( !g::memory.read( bvh_nodes_ptr, outer_buf.data( ), outer_buf.size( ) ) )
+				{
+					continue;
+				}
 
 				std::vector<std::uintptr_t> leaves;
 				leaves.reserve( 256 );

@@ -18,6 +18,8 @@ namespace features::misc {
 			this->update_in_flight( );
 		}
 
+		const auto projectiles = systems::g_collector.projectiles( );
+
 		std::erase_if( this->m_in_flight, [ & ]( const in_flight_grenade& g )
 			{
 				if ( !g.detonated )
@@ -31,8 +33,7 @@ namespace features::misc {
 					return false;
 				}
 
-				const auto projectiles = systems::g_collector.projectiles( );
-				for ( const auto& proj : projectiles )
+				for ( const auto& proj : *projectiles )
 				{
 					if ( proj.entity == g.entity )
 					{
@@ -251,7 +252,7 @@ namespace features::misc {
 
 		std::unordered_set<std::uintptr_t> alive{};
 
-		for ( const auto& proj : projectiles )
+		for ( const auto& proj : *projectiles )
 		{
 			if ( cfg.local_only && proj.thrower_handle != local_pawn_handle )
 			{

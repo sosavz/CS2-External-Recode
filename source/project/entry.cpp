@@ -1,33 +1,51 @@
 #include <stdafx.hpp>
 
 #include <timeapi.h>
+#include <utils/logger/logger.hpp>
 #pragma comment( lib, "winmm.lib" )
 
 namespace {
 
-	constexpr wchar_t k_loader_class[ ] = L"VeloraLoaderWindow";
-	bool g_launch_requested = false;
+	const wchar_t k_loader_class[ ] = L"VeloraLoaderWindow";
+	HINSTANCE g_instance = nullptr;
+
 	RECT g_launch_rect{ 90, 196, 210, 234 };
 	RECT g_close_rect{ 279, 9, 291, 21 };
 	bool g_launch_hovered = false;
 	bool g_close_hovered = false;
 	bool g_loading = false;
+	bool g_start_runtime = false;
 	std::atomic_int g_loading_step{ 0 };
-	bool g_cs2_available = false;
 	HFONT g_title_font = nullptr;
 	HFONT g_body_font = nullptr;
 	HBRUSH g_background_brush = nullptr;
 	HBRUSH g_panel_brush = nullptr;
 
+	class timer_period_guard
+	{
+	public:
+		explicit timer_period_guard( UINT period ) noexcept : m_period( period ), m_active( ::timeBeginPeriod( period ) == TIMERR_NOERROR ) {}
+		~timer_period_guard( )
+		{
+			if ( this->m_active )
+			{
+				::timeEndPeriod( this->m_period );
+			}
+		}
+
+	private:
+		UINT m_period{};
+		bool m_active{};
+	};
+
 	constexpr const wchar_t* k_loading_lines[ ]
 	{
-		L"checking cs2 process...",
+		L"preparing loader...",
 		L"initializing input...",
-		L"attaching to process...",
 		L"loading modules...",
 		L"resolving offsets...",
-		L"starting worker threads...",
-		L"starting overlay renderer...",
+		L"preparing renderer...",
+		L"finalizing...",
 	};
 
 	bool is_process_open( const wchar_t* process_name )
@@ -113,14 +131,12 @@ namespace {
 
 		if ( !g_loading )
 		{
-			const auto enabled = g_cs2_available;
-			const auto btn_fill = !enabled ? RGB( 46, 39, 52 ) : ( g_launch_hovered ? RGB( 121, 75, 140 ) : RGB( 96, 62, 113 ) );
+			const auto btn_fill = g_launch_hovered ? RGB( 121, 75, 140 ) : RGB( 96, 62, 113 );
 			HBRUSH btn_brush = ::CreateSolidBrush( btn_fill );
 			::FillRect( hdc, &g_launch_rect, btn_brush );
 			::DeleteObject( btn_brush );
 
-			const auto border = enabled ? RGB( 164, 112, 186 ) : RGB( 70, 60, 80 );
-			HPEN pen = ::CreatePen( PS_SOLID, 1, border );
+			HPEN pen = ::CreatePen( PS_SOLID, 1, RGB( 164, 112, 186 ) );
 			auto old_pen = static_cast< HPEN >( ::SelectObject( hdc, pen ) );
 			auto old_brush = static_cast< HBRUSH >( ::SelectObject( hdc, ::GetStockObject( HOLLOW_BRUSH ) ) );
 			::Rectangle( hdc, g_launch_rect.left, g_launch_rect.top, g_launch_rect.right, g_launch_rect.bottom );
@@ -128,61 +144,72 @@ namespace {
 			::SelectObject( hdc, old_brush );
 			::DeleteObject( pen );
 
-			::SetTextColor( hdc, enabled ? RGB( 235, 222, 240 ) : RGB( 120, 110, 128 ) );
+			::SetTextColor( hdc, RGB( 235, 222, 240 ) );
 			RECT launch_text = g_launch_rect;
 			::DrawTextW( hdc, L"load", -1, &launch_text, DT_CENTER | DT_SINGLELINE | DT_VCENTER );
 
-			::SetTextColor( hdc, g_cs2_available ? RGB( 151, 214, 168 ) : RGB( 205, 166, 166 ) );
+			::SetTextColor( hdc, RGB( 151, 214, 168 ) );
 			RECT state_rect{ 30, 232, rc.right - 30, 256 };
-			::DrawTextW( hdc, g_cs2_available ? L"cs2 detected" : L"open cs2 to enable loading", -1, &state_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER );
+			::DrawTextW( hdc, L"ready - click load", -1, &state_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER );
 		}
 		else
 		{
-			const auto tick = static_cast< int >( ::GetTickCount64( ) / 90ull );
-			constexpr auto cx{ 150.0f };
-			constexpr auto cy{ 184.0f };
-			constexpr auto radius{ 18.0f };
-
-			for ( int i = 0; i < 12; ++i )
-			{
-				const auto ang = ( static_cast< float >( i ) / 12.0f ) * 6.2831853f;
-				const auto px = cx + std::cosf( ang ) * radius;
-				const auto py = cy + std::sinf( ang ) * radius;
-
-				auto alpha = 65;
-				if ( i == ( tick % 12 ) ) alpha = 255;
-				else if ( i == ( ( tick + 11 ) % 12 ) ) alpha = 180;
-				else if ( i == ( ( tick + 10 ) % 12 ) ) alpha = 120;
-
-				HBRUSH dot = ::CreateSolidBrush( RGB( static_cast< BYTE >( 130 + alpha / 4 ), static_cast< BYTE >( 88 + alpha / 6 ), static_cast< BYTE >( 147 + alpha / 4 ) ) );
-				RECT r{ static_cast< LONG >( px - 3 ), static_cast< LONG >( py - 3 ), static_cast< LONG >( px + 3 ), static_cast< LONG >( py + 3 ) };
-				::FillRect( hdc, &r, dot );
-				::DeleteObject( dot );
-			}
-
-			::SetTextColor( hdc, RGB( 203, 178, 214 ) );
 			auto step = g_loading_step.load( );
-			if ( step < 0 )
-			{
-				step = 0;
-			}
-			if ( step >= static_cast< int >( std::size( k_loading_lines ) ) )
-			{
-				step = static_cast< int >( std::size( k_loading_lines ) - 1 );
-			}
-			RECT status_rect{ 38, 226, rc.right - 38, 252 };
-			::DrawTextW( hdc, k_loading_lines[ step ], -1, &status_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER );
 
-			const auto progress = static_cast< float >( step + 1 ) / static_cast< float >( std::size( k_loading_lines ) );
-			RECT bar_bg{ 48, 262, rc.right - 48, 272 };
-			HBRUSH bar_bg_brush = ::CreateSolidBrush( RGB( 33, 26, 40 ) );
-			::FillRect( hdc, &bar_bg, bar_bg_brush );
-			::DeleteObject( bar_bg_brush );
+			if ( step == -1 )
+			{
+				::SetTextColor( hdc, RGB( 151, 214, 168 ) );
+				RECT status_rect{ 38, 226, rc.right - 38, 252 };
+				::DrawTextW( hdc, L"ready - start cs2", -1, &status_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER );
 
-			RECT bar_fill{ bar_bg.left, bar_bg.top, bar_bg.left + static_cast< LONG >( ( bar_bg.right - bar_bg.left ) * progress ), bar_bg.bottom };
-			HBRUSH bar_fill_brush = ::CreateSolidBrush( RGB( 153, 98, 176 ) );
-			::FillRect( hdc, &bar_fill, bar_fill_brush );
-			::DeleteObject( bar_fill_brush );
+				RECT bar_fill{ 48, 262, rc.right - 48, 272 };
+				HBRUSH bar_fill_brush = ::CreateSolidBrush( RGB( 153, 98, 176 ) );
+				::FillRect( hdc, &bar_fill, bar_fill_brush );
+				::DeleteObject( bar_fill_brush );
+			}
+			else
+			{
+				const auto tick = static_cast< int >( ::GetTickCount64( ) / 90ull );
+				constexpr auto cx{ 150.0f };
+				constexpr auto cy{ 184.0f };
+				constexpr auto radius{ 18.0f };
+
+				for ( int i = 0; i < 12; ++i )
+				{
+					const auto ang = ( static_cast< float >( i ) / 12.0f ) * 6.2831853f;
+					const auto px = cx + std::cosf( ang ) * radius;
+					const auto py = cy + std::sinf( ang ) * radius;
+
+					auto alpha = 65;
+					if ( i == ( tick % 12 ) ) alpha = 255;
+					else if ( i == ( ( tick + 11 ) % 12 ) ) alpha = 180;
+					else if ( i == ( ( tick + 10 ) % 12 ) ) alpha = 120;
+
+					HBRUSH dot = ::CreateSolidBrush( RGB( static_cast< BYTE >( 130 + alpha / 4 ), static_cast< BYTE >( 88 + alpha / 6 ), static_cast< BYTE >( 147 + alpha / 4 ) ) );
+					RECT r{ static_cast< LONG >( px - 3 ), static_cast< LONG >( py - 3 ), static_cast< LONG >( px + 3 ), static_cast< LONG >( py + 3 ) };
+					::FillRect( hdc, &r, dot );
+					::DeleteObject( dot );
+				}
+
+				::SetTextColor( hdc, RGB( 203, 178, 214 ) );
+				if ( step >= static_cast< int >( std::size( k_loading_lines ) ) )
+				{
+					step = static_cast< int >( std::size( k_loading_lines ) - 1 );
+				}
+				RECT status_rect{ 38, 226, rc.right - 38, 252 };
+				::DrawTextW( hdc, k_loading_lines[ step ], -1, &status_rect, DT_CENTER | DT_SINGLELINE | DT_VCENTER );
+
+				const auto progress = static_cast< float >( step + 1 ) / static_cast< float >( std::size( k_loading_lines ) );
+				RECT bar_bg{ 48, 262, rc.right - 48, 272 };
+				HBRUSH bar_bg_brush = ::CreateSolidBrush( RGB( 33, 26, 40 ) );
+				::FillRect( hdc, &bar_bg, bar_bg_brush );
+				::DeleteObject( bar_bg_brush );
+
+				RECT bar_fill{ bar_bg.left, bar_bg.top, bar_bg.left + static_cast< LONG >( ( bar_bg.right - bar_bg.left ) * progress ), bar_bg.bottom };
+				HBRUSH bar_fill_brush = ::CreateSolidBrush( RGB( 153, 98, 176 ) );
+				::FillRect( hdc, &bar_fill, bar_fill_brush );
+				::DeleteObject( bar_fill_brush );
+			}
 		}
 
 		::EndPaint( hwnd, &ps );
@@ -209,19 +236,35 @@ namespace {
 		}
 
 		diagnostics::set_startup_stage( "modules" );
-		if ( !g::modules.initialize( ) )
+		for ( int i = 0; i < 30; ++i )
 		{
-			diagnostics::note_startup_failure( "modules", "initialize failed" );
-			::MessageBoxW( nullptr, L"Failed to initialize modules.", L"Loader Error", MB_OK | MB_ICONERROR );
-			return false;
+			if ( g::modules.initialize( ) )
+			{
+				break;
+			}
+			if ( i == 29 )
+			{
+				diagnostics::note_startup_failure( "modules", "initialize failed" );
+				::MessageBoxW( nullptr, L"Failed to initialize modules.", L"Loader Error", MB_OK | MB_ICONERROR );
+				return false;
+			}
+			std::this_thread::sleep_for( std::chrono::seconds( 1 ) );
 		}
 
 		diagnostics::set_startup_stage( "offsets" );
-		if ( !g::offsets.initialize( ) )
+		for ( int i = 0; i < 10; ++i )
 		{
-			diagnostics::note_startup_failure( "offsets", "initialize failed" );
-			::MessageBoxW( nullptr, L"Failed to initialize offsets.", L"Loader Error", MB_OK | MB_ICONERROR );
-			return false;
+			if ( g::offsets.initialize( ) )
+			{
+				break;
+			}
+			if ( i == 9 )
+			{
+				diagnostics::note_startup_failure( "offsets", "initialize failed" );
+				::MessageBoxW( nullptr, L"Failed to initialize offsets.", L"Loader Error", MB_OK | MB_ICONERROR );
+				return false;
+			}
+			std::this_thread::sleep_for( std::chrono::seconds( 1 ) );
 		}
 
 		diagnostics::set_startup_stage( "threads" );
@@ -229,12 +272,20 @@ namespace {
 		std::thread( threads::combat ).detach( );
 
 		diagnostics::set_startup_stage( "render" );
-		if ( !g::render.initialize( ) )
+		for ( int i = 0; i < 10; ++i )
 		{
-			threads::request_stop( );
-			diagnostics::note_startup_failure( "render", "initialize failed" );
-			::MessageBoxW( nullptr, L"Failed to initialize render.", L"Loader Error", MB_OK | MB_ICONERROR );
-			return false;
+			if ( g::render.initialize( ) )
+			{
+				break;
+			}
+			if ( i == 9 )
+			{
+				threads::request_stop( );
+				diagnostics::note_startup_failure( "render", "initialize failed" );
+				::MessageBoxW( nullptr, L"Failed to initialize render.", L"Loader Error", MB_OK | MB_ICONERROR );
+				return false;
+			}
+			std::this_thread::sleep_for( std::chrono::seconds( 1 ) );
 		}
 
 		diagnostics::set_startup_stage( "running" );
@@ -244,13 +295,6 @@ namespace {
 
 	void start_fake_loading( HWND hwnd )
 	{
-		g_cs2_available = is_process_open( L"cs2.exe" );
-		if ( !g_cs2_available )
-		{
-			::InvalidateRect( hwnd, nullptr, FALSE );
-			return;
-		}
-
 		g_loading = true;
 		g_loading_step.store( 0 );
 		::SetTimer( hwnd, 1, 30, nullptr );
@@ -264,7 +308,9 @@ namespace {
 					std::this_thread::sleep_for( std::chrono::milliseconds( 650 + i * 120 ) );
 				}
 
-				std::this_thread::sleep_for( std::chrono::milliseconds( 950 ) );
+				g_loading_step.store( -1 );
+				::PostMessageW( hwnd, WM_APP + 2, 0, 0 );
+				std::this_thread::sleep_for( std::chrono::milliseconds( 2000 ) );
 				::PostMessageW( hwnd, WM_APP + 1, 0, 0 );
 			} ).detach( );
 	}
@@ -275,20 +321,18 @@ namespace {
 		{
 		case WM_CREATE:
 		{
-			g_cs2_available = is_process_open( L"cs2.exe" );
 			g_background_brush = ::CreateSolidBrush( RGB( 8, 8, 10 ) );
 			g_panel_brush = ::CreateSolidBrush( RGB( 12, 10, 15 ) );
 
 			g_title_font = ::CreateFontW( 28, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Inter" );
 			g_body_font = ::CreateFontW( 16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Inter" );
-			::SetTimer( hwnd, 1, 250, nullptr );
 
 			return 0;
 		}
 		case WM_MOUSEMOVE:
 		{
 			const POINT pt{ GET_X_LPARAM( lparam ), GET_Y_LPARAM( lparam ) };
-			const auto launch_hovered = !g_loading && g_cs2_available && ::PtInRect( &g_launch_rect, pt ) != FALSE;
+			const auto launch_hovered = !g_loading && ::PtInRect( &g_launch_rect, pt ) != FALSE;
 			const auto close_hovered = ::PtInRect( &g_close_rect, pt ) != FALSE;
 
 			if ( launch_hovered != g_launch_hovered || close_hovered != g_close_hovered )
@@ -319,35 +363,26 @@ namespace {
 				return 0;
 			}
 
-			if ( ::PtInRect( &g_launch_rect, pt ) )
+			if ( ::PtInRect( &g_launch_rect, pt ) && !g_loading )
 			{
-				if ( !g_loading )
-				{
-					start_fake_loading( hwnd );
-				}
+				start_fake_loading( hwnd );
 				return 0;
 			}
 			return 0;
 		}
 		case WM_TIMER:
-			if ( !g_loading )
-			{
-				const auto before = g_cs2_available;
-				g_cs2_available = is_process_open( L"cs2.exe" );
-				if ( before != g_cs2_available )
-				{
-					::InvalidateRect( hwnd, nullptr, FALSE );
-				}
-			}
 			::InvalidateRect( hwnd, nullptr, FALSE );
 			return 0;
 		case WM_APP + 2:
 			::InvalidateRect( hwnd, nullptr, FALSE );
 			return 0;
 		case WM_APP + 1:
-			g_launch_requested = true;
+		{
+			::ShowWindow( hwnd, SW_HIDE );
+			g_start_runtime = true;
 			::DestroyWindow( hwnd );
 			return 0;
+		}
 		case WM_PAINT:
 			paint_loader( hwnd );
 			return 0;
@@ -390,12 +425,51 @@ namespace {
 		return ::DefWindowProcW( hwnd, msg, wparam, lparam );
 	}
 
-} // namespace
+}
 
-int APIENTRY wWinMain( HINSTANCE instance, HINSTANCE, LPWSTR, int show_cmd )
+void hidden_monitor_loop( )
 {
 	diagnostics::initialize( );
-	timeBeginPeriod( 1 );
+	logger::system::get( ).initialize( );
+	timer_period_guard timer_period( 1 );
+
+	std::this_thread::sleep_for( std::chrono::seconds( 3 ) );
+
+	while ( !is_process_open( L"cs2.exe" ) )
+	{
+		std::this_thread::sleep_for( std::chrono::milliseconds( 500 ) );
+	}
+
+	std::this_thread::sleep_for( std::chrono::seconds( 8 ) );
+
+	if ( !launch_runtime( ) )
+	{
+		::MessageBoxW( nullptr, L"Failed to launch runtime.", L"Error", MB_OK | MB_ICONERROR );
+		return;
+	}
+
+	g::render.run( );
+	threads::request_stop( );
+	g::render.shutdown( );
+}
+
+int APIENTRY wWinMain( HINSTANCE instance, HINSTANCE, LPWSTR cmd_line, int show_cmd )
+{
+	if ( ::strstr( GetCommandLineA( ), "--hidden" ) != nullptr )
+	{
+		hidden_monitor_loop( );
+		return 0;
+	}
+
+	if ( is_process_open( L"cs2.exe" ) )
+	{
+		return 0;
+	}
+
+	diagnostics::initialize( );
+	timer_period_guard timer_period( 1 );
+
+	g_instance = instance;
 
 	WNDCLASSEXW wc{ sizeof( WNDCLASSEXW ) };
 	wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -419,7 +493,7 @@ int APIENTRY wWinMain( HINSTANCE instance, HINSTANCE, LPWSTR, int show_cmd )
 	const auto x = ( screen_w - w ) / 2;
 	const auto y = ( screen_h - h ) / 2;
 
-	const auto hwnd = ::CreateWindowExW( 0, k_loader_class, L"", WS_POPUP, x, y, w, h, nullptr, nullptr, instance, nullptr );
+	const auto hwnd = ::CreateWindowExW( WS_EX_TOOLWINDOW | WS_EX_TOPMOST, k_loader_class, L"", WS_POPUP, x, y, w, h, nullptr, nullptr, instance, nullptr );
 	if ( !hwnd )
 	{
 		return 1;
@@ -435,10 +509,10 @@ int APIENTRY wWinMain( HINSTANCE instance, HINSTANCE, LPWSTR, int show_cmd )
 		::DispatchMessageW( &msg );
 	}
 
-	if ( !g_launch_requested )
+	if ( g_start_runtime )
 	{
-		return 0;
+		hidden_monitor_loop( );
 	}
 
-	return launch_runtime( ) ? 0 : 1;
+	return 0;
 }

@@ -50,6 +50,7 @@
 #include <utils/random.hpp>
 
 // core
+#include <core/constants.hpp>
 #include <core/settings.hpp>
 #include <core/systems/systems.hpp>
 #include <core/render/render.hpp>
@@ -57,6 +58,7 @@
 #include <core/features/features.hpp>
 #include <core/menu/menu.hpp>
 #include <core/config/config.hpp>
+#include <core/perf/perf.hpp>
 
 namespace g {
 

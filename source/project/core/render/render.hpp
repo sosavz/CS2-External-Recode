@@ -12,15 +12,19 @@ public:
 	};
 
 	bool initialize( );
+	void run( );
+	void shutdown( );
 
 	[[nodiscard]] const loaded_fonts& fonts( ) const { return this->m_fonts; }
 	[[nodiscard]] HWND hwnd( ) const { return this->m_hwnd; }
 	[[nodiscard]] explicit operator bool( ) const { return this->m_hwnd != nullptr; }
 
 private:
-	void run( );
 	void update_input_window( );
 	void draw_watermark( zdraw::draw_list& draw_list, int fps ) const;
+	void draw_spectator_warning( zdraw::draw_list& draw_list ) const;
+	void draw_perf_overlay( zdraw::draw_list& draw_list );
+	void draw_perf_graph( zdraw::draw_list& draw_list, float x, float y, float w, float h, const std::vector<float>& data, zdraw::rgba color );
 	bool setup_d3d( );
 	bool register_window_class( );
 

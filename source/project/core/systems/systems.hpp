@@ -54,17 +54,25 @@ namespace systems {
 
 		[[nodiscard]] std::uintptr_t lookup( std::uint32_t handle ) const;
 		[[nodiscard]] std::vector<cached> by_type( type filter ) const;
-		[[nodiscard]] std::vector<cached> all( ) const;
+		[[nodiscard]] std::shared_ptr<const std::vector<cached>> all( ) const;
 
 	private:
+		struct slot_cache
+		{
+			std::uintptr_t ptr{};
+			std::uint32_t schema_hash{};
+			type type{ type::unknown };
+		};
 
 		[[nodiscard]] std::uintptr_t get_entity_list( ) const;
 		[[nodiscard]] std::uintptr_t get_by_index( std::uintptr_t entity_list, std::int32_t index ) const;
 		[[nodiscard]] std::uint32_t get_schema_hash( std::uintptr_t entity ) const;
 		[[nodiscard]] type classify( std::uint32_t schema_hash ) const;
 
-		std::vector<cached> m_entities{};
+		std::shared_ptr<const std::vector<cached>> m_entities{ std::make_shared<const std::vector<cached>>( ) };
+		std::array<slot_cache, constants::entities::k_max_entity_slots> m_slot_cache{};
 		mutable std::shared_mutex m_mutex{};
+		std::uint32_t m_frame_counter{ 0 };
 	};
 
 	class local
@@ -72,41 +80,52 @@ namespace systems {
 	public:
 		void update( );
 
-		[[nodiscard]] std::uintptr_t controller( ) const { return this->m_controller.load( ); }
-		[[nodiscard]] std::uintptr_t pawn( ) const { return this->m_pawn.load( ); }
-		[[nodiscard]] std::int32_t team( ) const { return this->m_team.load( ); }
-		[[nodiscard]] bool valid( ) const { return this->m_pawn.load( ) != 0 || this->m_observer_pawn.load( ) != 0; }
-		[[nodiscard]] bool alive( ) const { return this->m_alive.load( ); }
-		[[nodiscard]] std::uintptr_t view_pawn( ) const { return this->m_alive.load( ) ? this->m_pawn.load( ) : this->m_observer_pawn.load( ); }
+		[[nodiscard]] std::uintptr_t controller( ) const;
+		[[nodiscard]] std::uintptr_t pawn( ) const;
+		[[nodiscard]] std::int32_t team( ) const;
+		[[nodiscard]] bool valid( ) const;
+		[[nodiscard]] bool alive( ) const;
+		[[nodiscard]] std::uintptr_t view_pawn( ) const;
 
-		[[nodiscard]] std::uintptr_t weapon( ) const { return this->m_weapon.load( ); }
-		[[nodiscard]] std::uintptr_t weapon_vdata( ) const { return this->m_weapon_vdata.load( ); }
-		[[nodiscard]] std::uint32_t weapon_type( ) const { return this->m_weapon_type.load( ); }
+		[[nodiscard]] std::uintptr_t weapon( ) const;
+		[[nodiscard]] std::uintptr_t weapon_vdata( ) const;
+		[[nodiscard]] std::uint32_t weapon_type( ) const;
 
 		[[nodiscard]] bool is_enemy( std::int32_t other_team ) const
 		{
-			if ( !this->m_team_mode.load( ) )
+			std::shared_lock lock( this->m_mutex );
+			if ( !this->m_state.team_mode )
 			{
 				return true;
 			}
 
-			return this->m_view_team.load( ) != other_team;
+			return this->m_state.view_team != other_team;
 		}
 
+		[[nodiscard]] bool is_being_spectated( ) const;
+		[[nodiscard]] int spectator_count( ) const;
+
 	private:
+		struct state
+		{
+			std::uintptr_t controller{};
+			std::uintptr_t pawn{};
+			std::uintptr_t observer_pawn{};
+			std::int32_t team{};
+			std::int32_t view_team{};
+			bool alive{};
+			bool team_mode{ true };
+			std::uintptr_t weapon{};
+			std::uintptr_t weapon_vdata{};
+			std::uint32_t weapon_type{};
+			int spectator_count{};
+		};
+
+		void publish( state next );
 		void reset( );
 
-		std::atomic<std::uintptr_t> m_controller{};
-		std::atomic<std::uintptr_t> m_pawn{};
-		std::atomic<std::uintptr_t> m_observer_pawn{};
-		std::atomic<std::int32_t> m_team{};
-		std::atomic<std::int32_t> m_view_team{};
-		std::atomic<bool> m_alive{};
-		std::atomic<bool> m_team_mode{ true };
-
-		std::atomic<std::uintptr_t> m_weapon{};
-		std::atomic<std::uintptr_t> m_weapon_vdata{};
-		std::atomic<std::uint32_t> m_weapon_type{};
+		mutable std::shared_mutex m_mutex{};
+		state m_state{};
 	};
 
 	class view
@@ -151,6 +170,7 @@ namespace systems {
 		};
 
 		[[nodiscard]] data get( std::uintptr_t bone_array ) const;
+		[[nodiscard]] std::optional<math::vector3> get_head_position( std::uintptr_t bone_cache ) const;
 	};
 
 	class bounds
@@ -280,21 +300,21 @@ namespace systems {
 
 		void run( );
 
-		[[nodiscard]] std::vector<player> players( ) const;
-		[[nodiscard]] std::vector<item> items( ) const;
-		[[nodiscard]] std::vector<projectile> projectiles( ) const;
+		[[nodiscard]] std::shared_ptr<const std::vector<player>> players( ) const;
+		[[nodiscard]] std::shared_ptr<const std::vector<item>> items( ) const;
+		[[nodiscard]] std::shared_ptr<const std::vector<projectile>> projectiles( ) const;
 
 	private:
-		void collect_players( const std::vector<entities::cached>& raw );
+		void collect_players( const std::vector<entities::cached>& raw, bool needs_visibility, bool needs_hitboxes );
 		void collect_items( const std::vector<entities::cached>& raw );
 		void collect_projectiles( const std::vector<entities::cached>& raw );
 
 		[[nodiscard]] static item_subtype classify_item( std::uint32_t schema_hash );
 		[[nodiscard]] static projectile_subtype classify_projectile( std::uint32_t schema_hash );
 
-		std::vector<player> m_players{};
-		std::vector<item> m_items{};
-		std::vector<projectile> m_projectiles{};
+		std::shared_ptr<const std::vector<player>> m_players{ std::make_shared<const std::vector<player>>( ) };
+		std::shared_ptr<const std::vector<item>> m_items{ std::make_shared<const std::vector<item>>( ) };
+		std::shared_ptr<const std::vector<projectile>> m_projectiles{ std::make_shared<const std::vector<projectile>>( ) };
 		mutable std::shared_mutex m_mutex{};
 	};
 
@@ -425,14 +445,47 @@ namespace systems {
 
 } // namespace systems
 
+/*
+ * SCHEMA Macro:
+ * - Caches field offsets using schema system
+ * - Usage: SCHEMA("CCSPlayerController", "m_iPing"_hash)
+ * - First call does hash lookup, subsequent calls use cached value
+ * - Returns: std::int32_t offset from entity base
+ *
+ * CONVAR Macro:
+ * - Caches convars (console variables) pointers
+ * - Usage: CONVAR("sensitivity"_hash)
+ * - First call does cvar lookup, subsequent calls use cached pointer
+ * - Returns: std::uintptr_t pointer to convar object
+ */
 #define SCHEMA( class_name, field_hash ) \
 	[]( ) -> std::int32_t { \
-		static const auto val = systems::g_schemas.lookup( class_name, field_hash ); \
-		return val; \
+		static std::atomic<std::int32_t> val{}; \
+		const auto cached = val.load( std::memory_order_acquire ); \
+		if ( cached ) \
+		{ \
+			return cached; \
+		} \
+		const auto resolved = systems::g_schemas.lookup( class_name, field_hash ); \
+		if ( resolved ) \
+		{ \
+			val.store( resolved, std::memory_order_release ); \
+		} \
+		return resolved; \
 	}( )
 
 #define CONVAR( name_hash ) \
 	[]( ) -> std::uintptr_t { \
-		static const auto val = systems::g_convars.find( name_hash ); \
-		return val; \
+		static std::atomic<std::uintptr_t> val{}; \
+		const auto cached = val.load( std::memory_order_acquire ); \
+		if ( cached ) \
+		{ \
+			return cached; \
+		} \
+		const auto resolved = systems::g_convars.find( name_hash ); \
+		if ( resolved ) \
+		{ \
+			val.store( resolved, std::memory_order_release ); \
+		} \
+		return resolved; \
 	}( )

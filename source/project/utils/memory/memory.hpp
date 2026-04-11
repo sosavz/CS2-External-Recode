@@ -51,6 +51,9 @@ private:
 	std::uint32_t m_id{};
 	void* m_handle{};
 	std::uintptr_t m_base{};
+	mutable std::shared_mutex m_cache_mutex{};
+	mutable std::unordered_map<std::string, std::uintptr_t> m_module_cache{};
+	mutable std::unordered_map<std::uintptr_t, std::size_t> m_module_size_cache{};
 
 	std::size_t get_module_size( std::uintptr_t module_base ) const;
 	std::uintptr_t find_qword_in_sections( std::uintptr_t module_base, std::uintptr_t value, std::uint32_t section_filter ) const;

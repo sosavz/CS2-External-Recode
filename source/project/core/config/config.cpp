@@ -25,6 +25,111 @@ namespace {
 		return s;
 	}
 
+	static void skip_ws( std::string_view text, std::size_t& pos )
+	{
+		while ( pos < text.size( ) && std::isspace( static_cast<unsigned char>( text[ pos ] ) ) )
+		{
+			++pos;
+		}
+	}
+
+	static bool parse_json_string( std::string_view text, std::size_t& pos, std::string& out )
+	{
+		if ( pos >= text.size( ) || text[ pos ] != '"' )
+		{
+			return false;
+		}
+
+		++pos;
+		out.clear( );
+
+		while ( pos < text.size( ) )
+		{
+			const auto ch = text[ pos++ ];
+			if ( ch == '"' )
+			{
+				return true;
+			}
+
+			if ( ch == '\\' )
+			{
+				if ( pos >= text.size( ) )
+				{
+					return false;
+				}
+
+				const auto escaped = text[ pos++ ];
+				switch ( escaped )
+				{
+				case '"': out.push_back( '"' ); break;
+				case '\\': out.push_back( '\\' ); break;
+				case '/': out.push_back( '/' ); break;
+				case 'b': out.push_back( '\b' ); break;
+				case 'f': out.push_back( '\f' ); break;
+				case 'n': out.push_back( '\n' ); break;
+				case 'r': out.push_back( '\r' ); break;
+				case 't': out.push_back( '\t' ); break;
+				default: return false;
+				}
+				continue;
+			}
+
+			out.push_back( ch );
+		}
+
+		return false;
+	}
+
+	static bool parse_json_value( std::string_view text, std::size_t& pos, std::string& out )
+	{
+		skip_ws( text, pos );
+		if ( pos >= text.size( ) )
+		{
+			return false;
+		}
+
+		const auto start = pos;
+		if ( text[ pos ] == '[' )
+		{
+			int depth = 0;
+			do
+			{
+				const auto ch = text[ pos++ ];
+				if ( ch == '[' )
+				{
+					++depth;
+				}
+				else if ( ch == ']' )
+				{
+					--depth;
+				}
+			} while ( pos < text.size( ) && depth > 0 );
+
+			if ( depth != 0 )
+			{
+				return false;
+			}
+		}
+		else if ( text[ pos ] == '"' )
+		{
+			std::string ignored{};
+			if ( !parse_json_string( text, pos, ignored ) )
+			{
+				return false;
+			}
+		}
+		else
+		{
+			while ( pos < text.size( ) && text[ pos ] != ',' && text[ pos ] != '}' )
+			{
+				++pos;
+			}
+		}
+
+		out = trim_copy( std::string( text.substr( start, pos - start ) ) );
+		return !out.empty( );
+	}
+
 	template <typename F>
 	void visit_settings( F&& f )
 	{
@@ -149,6 +254,7 @@ namespace {
 		f( "misc.grenades.enabled", m.m_grenades.enabled );
 		f( "misc.grenades.local_only", m.m_grenades.local_only );
 		f( "misc.grenades.color", m.m_grenades.color );
+		f( "misc.spectator_warning", m.spectator_warning );
 		f( "misc.watermark", m.watermark );
 		f( "misc.limit_fps", m.limit_fps );
 		f( "misc.fps_limit", m.fps_limit );
@@ -536,53 +642,74 @@ std::uint64_t config_system::settings_hash( ) const
 bool config_system::parse_json_map( const std::string& text, std::unordered_map<std::string, std::string>& out_map ) const
 {
 	out_map.clear( );
-	std::istringstream stream( text );
-	std::string line{};
+	std::string_view view{ text };
+	std::size_t pos = 0;
 
-	while ( std::getline( stream, line ) )
+	skip_ws( view, pos );
+	if ( pos >= view.size( ) || view[ pos ] != '{' )
 	{
-		line = trim_copy( line );
-		if ( line.empty( ) || line == "{" || line == "}" )
+		return false;
+	}
+	++pos;
+
+	while ( true )
+	{
+		skip_ws( view, pos );
+		if ( pos >= view.size( ) )
 		{
-			continue;
+			return false;
 		}
 
-		const auto q0 = line.find( '"' );
-		if ( q0 == std::string::npos )
+		if ( view[ pos ] == '}' )
 		{
-			continue;
+			++pos;
+			break;
 		}
 
-		const auto q1 = line.find( '"', q0 + 1 );
-		if ( q1 == std::string::npos )
+		std::string key{};
+		if ( !parse_json_string( view, pos, key ) )
 		{
-			continue;
+			return false;
 		}
 
-		const auto colon = line.find( ':', q1 + 1 );
-		if ( colon == std::string::npos )
+		skip_ws( view, pos );
+		if ( pos >= view.size( ) || view[ pos ] != ':' )
 		{
-			continue;
+			return false;
 		}
+		++pos;
 
-		auto key = line.substr( q0 + 1, q1 - q0 - 1 );
-		auto value = trim_copy( line.substr( colon + 1 ) );
-
-		if ( !value.empty( ) && value.back( ) == ',' )
+		std::string value{};
+		if ( !parse_json_value( view, pos, value ) || key.empty( ) )
 		{
-			value.pop_back( );
-			value = trim_copy( value );
-		}
-
-		if ( key.empty( ) || value.empty( ) )
-		{
-			continue;
+			return false;
 		}
 
 		out_map[ std::move( key ) ] = std::move( value );
+
+		skip_ws( view, pos );
+		if ( pos >= view.size( ) )
+		{
+			return false;
+		}
+
+		if ( view[ pos ] == ',' )
+		{
+			++pos;
+			continue;
+		}
+
+		if ( view[ pos ] == '}' )
+		{
+			++pos;
+			break;
+		}
+
+		return false;
 	}
 
-	return !out_map.empty( );
+	skip_ws( view, pos );
+	return !out_map.empty( ) && pos == view.size( );
 }
 
 std::string config_system::serialize_json( ) const

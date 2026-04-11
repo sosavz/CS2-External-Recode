@@ -1,4 +1,5 @@
 #include <stdafx.hpp>
+#include <utils/logger/logger.hpp>
 
 namespace features::combat {
 
@@ -68,16 +69,28 @@ namespace features::combat {
 		{
 			if ( cfg.aimbot.enabled )
 			{
-				const auto target = this->select_target( eye_pos, view_angles, players, cfg );
+				const auto target = this->select_target( eye_pos, view_angles, *players, cfg );
 				if ( target.player )
 				{
+					LOG( logger::category::aimbot, "Aimbot: targeting player at (%.1f, %.1f, %.1f), fov=%.2f, hitbox=%d, damage=%.1f",
+						target.aim_point.x, target.aim_point.y, target.aim_point.z,
+						target.fov, target.hitbox, target.damage );
 					this->aimbot( eye_pos, view_angles, target, cfg.aimbot );
+				}
+				else
+				{
+					static std::uint32_t s_aimbot_no_target_log_counter = 0;
+					++s_aimbot_no_target_log_counter;
+					if ( ( s_aimbot_no_target_log_counter % 120 ) == 0 )
+					{
+						LOG( logger::category::aimbot, "Aimbot: no valid target found, players=%d", (int)players->size( ) );
+					}
 				}
 			}
 
 			if ( cfg.triggerbot.enabled )
 			{
-				this->triggerbot( eye_pos, view_angles, players, cfg.triggerbot );
+				this->triggerbot( eye_pos, view_angles, *players, cfg.triggerbot );
 			}
 		}
 	}
@@ -86,22 +99,30 @@ namespace features::combat {
 	{
 		target best{};
 		best.fov = static_cast< float >( cfg.aimbot.fov );
+		int skipped_non_enemy = 0;
+		int skipped_invulnerable_or_no_hitboxes = 0;
+		int skipped_invalid_bones = 0;
+		int skipped_no_aim_point = 0;
+		int skipped_fov = 0;
 
 		for ( const auto& player : players )
 		{
 			if ( !systems::g_local.is_enemy( player.team ) )
 			{
+				++skipped_non_enemy;
 				continue;
 			}
 
 			if ( player.invulnerable || player.hitboxes.count <= 0 )
 			{
+				++skipped_invulnerable_or_no_hitboxes;
 				continue;
 			}
 
 			const auto bones = systems::g_bones.get( player.bone_cache );
 			if ( !bones.is_valid( ) )
 			{
+				++skipped_invalid_bones;
 				continue;
 			}
 
@@ -112,12 +133,14 @@ namespace features::combat {
 			const auto aim_point = this->get_aim_point( eye_pos, player, bones, cfg, damage, hitbox, penetrated );
 			if ( hitbox < 0 )
 			{
+				++skipped_no_aim_point;
 				continue;
 			}
 
 			const auto fov = this->get_fov( view_angles, eye_pos, aim_point );
 			if ( fov > best.fov )
 			{
+				++skipped_fov;
 				continue;
 			}
 
@@ -130,12 +153,29 @@ namespace features::combat {
 			best.penetrated = penetrated;
 		}
 
+		if ( !best.player )
+		{
+			static std::uint32_t s_target_reason_log_counter = 0;
+			++s_target_reason_log_counter;
+			if ( ( s_target_reason_log_counter % 120 ) == 0 )
+			{
+				LOG( logger::category::aimbot,
+					"Target scan: players=%d non_enemy=%d invuln_or_no_hitboxes=%d invalid_bones=%d no_aim_point=%d fov_reject=%d",
+					(int)players.size( ), skipped_non_enemy, skipped_invulnerable_or_no_hitboxes, skipped_invalid_bones, skipped_no_aim_point, skipped_fov );
+			}
+		}
+
 		return best;
 	}
 
 	math::vector3 legit::get_aim_point( const math::vector3& eye_pos, const systems::collector::player& player, const systems::bones::data& bones, const settings::combat::group_config& cfg, float& out_damage, int& out_hitbox, bool& out_penetrated ) const
 	{
 		out_hitbox = -1;
+
+		if ( cfg.aimbot.visible_only && !player.is_visible )
+		{
+			return {};
+		}
 
 		for ( const auto& hb : player.hitboxes )
 		{
@@ -152,24 +192,10 @@ namespace features::combat {
 			const auto pos = bones.get_position( hb.bone );
 			const auto hitgroup = systems::g_hitboxes.hitgroup_from_hitbox( hb.index );
 
-			if ( !cfg.aimbot.visible_only )
-			{
-				out_damage = combat::g_shared.pen( ).get_max_damage( hitgroup, player.armor, player.has_helmet, player.team );
-				out_hitbox = hb.index;
-				out_penetrated = false;
-				return pos;
-			}
-
-			const auto trace = systems::g_bvh.trace_ray( eye_pos, pos );
-			const auto visible = !trace.hit || trace.fraction > 0.97f;
-
-			if ( visible )
-			{
-				out_damage = combat::g_shared.pen( ).get_max_damage( hitgroup, player.armor, player.has_helmet, player.team );
-				out_hitbox = hb.index;
-				out_penetrated = false;
-				return pos;
-			}
+			out_damage = combat::g_shared.pen( ).get_max_damage( hitgroup, player.armor, player.has_helmet, player.team );
+			out_hitbox = hb.index;
+			out_penetrated = false;
+			return pos;
 
 		}
 
@@ -230,13 +256,13 @@ namespace features::combat {
 
 	void legit::aimbot( const math::vector3& eye_pos, const math::vector3& view_angles, const target& tgt, const settings::combat::aimbot& cfg )
 	{
-		if ( !( GetAsyncKeyState( cfg.key ) & 0x8000 ) )
+		if ( !g::input.is_key_held( cfg.key ) )
 		{
 			this->m_aim_error = {};
 			return;
 		}
 
-		constexpr auto m_yaw{ 0.022f };
+		constexpr auto m_yaw{ constants::aimbot::k_mouse_yaw_factor };
 		const auto sensitivity = systems::g_convars.get<float>( CONVAR( "sensitivity"_hash ) );
 		const auto fov_adjust = g::memory.read<float>( systems::g_local.pawn( ) + SCHEMA( "C_BasePlayerPawn", "m_flFOVSensitivityAdjust"_hash ) );
 		const auto deg_per_pixel = sensitivity * m_yaw * fov_adjust;
@@ -308,7 +334,7 @@ namespace features::combat {
 		math::vector3 forward{};
 		view_angles.to_directions( &forward, nullptr, nullptr );
 
-		constexpr auto max_range{ 8192.0f };
+		constexpr auto max_range{ constants::aimbot::k_max_aim_range };
 		const auto end_pos = eye_pos + forward * max_range;
 
 		const auto world_trace = systems::g_bvh.trace_ray( eye_pos, end_pos );
@@ -351,7 +377,7 @@ namespace features::combat {
 
 				const auto capsule_start = bone_pos + bone_rot.rotate_vector( hb.mins ) + velocity * prediction_time;
 				const auto capsule_end = bone_pos + bone_rot.rotate_vector( hb.maxs ) + velocity * prediction_time;
-				const auto radius = ( hb.radius > 0.0f ? hb.radius : 3.5f ) * 0.85f;
+				const auto radius = ( hb.radius > 0.0f ? hb.radius : constants::aimbot::k_capsule_radius ) * 0.85f;
 
 				if ( !g_shared.ray_hits_capsule( eye_pos, forward, capsule_start, capsule_end, radius ) )
 				{
@@ -395,7 +421,7 @@ namespace features::combat {
 			return;
 		}
 
-		if ( !( GetAsyncKeyState( cfg.key ) & 0x8000 ) )
+		if ( !g::input.is_key_held( cfg.key ) )
 		{
 			this->m_trigger_waiting = false;
 			return;

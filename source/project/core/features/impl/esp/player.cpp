@@ -1,4 +1,5 @@
 #include <stdafx.hpp>
+#include <utils/logger/logger.hpp>
 
 namespace features::esp {
 
@@ -13,27 +14,57 @@ namespace features::esp {
 		const auto global_vars = g::memory.read<std::uintptr_t>( g::offsets.global_vars );
 		if ( !global_vars )
 		{
+			LOG( logger::category::esp, "Global vars is null" );
 			return;
 		}
 
 		const auto current_time = g::memory.read<float>( global_vars + 0x30 );
 
-		for ( const auto& player : systems::g_collector.players( ) )
+		const auto all_players = systems::g_collector.players( );
+		int rendered_count = 0;
+		int skipped_no_enemy = 0;
+		int skipped_no_bones = 0;
+		int skipped_no_bounds = 0;
+		int skipped_no_controller = 0;
+		std::unordered_set<std::uintptr_t> live_controllers{};
+		live_controllers.reserve( all_players->size( ) );
+
+		for ( const auto& player : *all_players )
 		{
+			if ( player.controller )
+			{
+				live_controllers.insert( player.controller );
+			}
+
+			if ( !player.controller || !player.pawn )
+			{
+				++skipped_no_controller;
+				continue;
+			}
+
 			if ( !systems::g_local.is_enemy( player.team ) )
 			{
+				++skipped_no_enemy;
+				continue;
+			}
+
+			if ( !player.bone_cache || player.bone_cache < 0x10000 )
+			{
+				++skipped_no_bones;
 				continue;
 			}
 
 			const auto bones = systems::g_bones.get( player.bone_cache );
 			if ( !bones.is_valid( ) )
 			{
+				++skipped_no_bones;
 				continue;
 			}
 
 			const auto bounds = systems::g_bounds.get( bones );
 			if ( !bounds.is_valid( ) )
 			{
+				++skipped_no_bounds;
 				continue;
 			}
 
@@ -78,6 +109,21 @@ namespace features::esp {
 			{
 				this->add_flags( draw_list, bounds, player, cfg.m_info_flags, offsets );
 			}
+
+			++rendered_count;
+		}
+
+		std::erase_if( this->m_animations, [ & ]( const auto& entry )
+			{
+				return !live_controllers.contains( entry.first );
+			} );
+
+		static std::uint32_t s_esp_players_log_counter = 0;
+		++s_esp_players_log_counter;
+		if ( ( s_esp_players_log_counter % 120 ) == 0 || rendered_count > 0 )
+		{
+			LOG( logger::category::esp, "Players: total=%d, rendered=%d, skipped_enemy=%d, skipped_bones=%d, skipped_bounds=%d, skipped_controller=%d",
+				(int)all_players->size( ), rendered_count, skipped_no_enemy, skipped_no_bones, skipped_no_bounds, skipped_no_controller );
 		}
 	}
 
@@ -95,7 +141,7 @@ namespace features::esp {
 			constexpr auto edge_alpha{ 0.5f };
 			constexpr auto center_alpha{ 0.08f };
 			constexpr auto center_brightness{ 0.4f };
-			constexpr auto desaturation{ 0.7f };
+			constexpr auto desaturation{ constants::esp::k_desaturation_factor };
 
 			const auto r = color.r / 255.0f;
 			const auto g = color.g / 255.0f;
@@ -193,7 +239,7 @@ namespace features::esp {
 		anim.last_health = player.health;
 
 		const auto hp = std::clamp( player.health / 100.0f, 0.0f, 1.0f );
-		const auto flash_t = std::clamp( 1.0f - ( current_time - anim.last_damage_time ) * 2.5f, 0.0f, 1.0f );
+		const auto flash_t = std::clamp( 1.0f - ( current_time - anim.last_damage_time ) * constants::esp::k_damage_flash_duration, 0.0f, 1.0f );
 
 		std::vector<std::vector<poly2d::point>> pills;
 

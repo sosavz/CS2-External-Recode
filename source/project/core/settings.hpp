@@ -249,7 +249,10 @@ namespace settings {
 			zdraw::rgba color{ 170, 175, 220, 200 };
 		} m_grenades{};
 
+		bool spectator_warning{ false };
 		bool watermark{ true };
+		bool perf_overlay{ false };
+		bool dev_logging{ false };
 
 		bool limit_fps{ false };
 		int fps_limit{ 240 };

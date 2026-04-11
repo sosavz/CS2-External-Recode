@@ -1,43 +1,42 @@
 #include <stdafx.hpp>
+#include <utils/logger/logger.hpp>
 
 namespace systems {
 
+	namespace {
+		[[nodiscard]] std::uint32_t read_player_pawn_handle( std::uintptr_t controller )
+		{
+			const auto primary = SCHEMA( "CCSPlayerController", "m_hPlayerPawn"_hash );
+			if ( primary )
+			{
+				const auto handle = g::memory.read<std::uint32_t>( controller + primary );
+				if ( handle && handle != 0xFFFFFFFF )
+				{
+					return handle;
+				}
+			}
+
+			const auto fallback = SCHEMA( "CCSPlayerController", "m_hPawn"_hash );
+			if ( fallback )
+			{
+				const auto handle = g::memory.read<std::uint32_t>( controller + fallback );
+				if ( handle && handle != 0xFFFFFFFF )
+				{
+					return handle;
+				}
+			}
+
+			return 0;
+		}
+	}
+
 	void collector::run( )
 	{
+		static std::uint32_t s_run_log_counter = 0;
 		const auto raw = systems::g_entities.all( );
 
-		this->collect_players( raw );
-		this->collect_items( raw );
-		this->collect_projectiles( raw );
-	}
-
-	std::vector<collector::player> collector::players( ) const
-	{
-		std::shared_lock lock( this->m_mutex );
-		return this->m_players;
-	}
-
-	std::vector<collector::item> collector::items( ) const
-	{
-		std::shared_lock lock( this->m_mutex );
-		return this->m_items;
-	}
-
-	std::vector<collector::projectile> collector::projectiles( ) const
-	{
-		std::shared_lock lock( this->m_mutex );
-		return this->m_projectiles;
-	}
-
-	void collector::collect_players( const std::vector<entities::cached>& raw )
-	{
-		std::vector<player> fresh{};
-		fresh.reserve( 64 );
-
-		const auto& esp_cfg = settings::g_esp.m_player;
-		const auto needs_visibility = esp_cfg.m_box.enabled || esp_cfg.m_skeleton.enabled || esp_cfg.m_hitboxes.enabled;
-		auto needs_hitboxes = esp_cfg.m_hitboxes.enabled;
-
+		const auto needs_visibility = settings::g_esp.m_player.m_box.enabled || settings::g_esp.m_player.m_skeleton.enabled || settings::g_esp.m_player.m_hitboxes.enabled;
+		auto needs_hitboxes = settings::g_esp.m_player.m_hitboxes.enabled;
 		if ( !needs_hitboxes )
 		{
 			for ( const auto& group : settings::g_combat.groups )
@@ -50,80 +49,160 @@ namespace systems {
 			}
 		}
 
+		this->collect_players( *raw, needs_visibility, needs_hitboxes );
+		this->collect_items( *raw );
+		this->collect_projectiles( *raw );
+
+		auto players = this->players( );
+		auto items = this->items( );
+		auto projectiles = this->projectiles( );
+		{
+			++s_run_log_counter;
+			if ( ( s_run_log_counter % 120 ) == 0 || !players->empty( ) )
+			{
+				LOG( logger::category::collector, "Collected: players=%d, items=%d, projectiles=%d, visibility_check=%s, hitboxes=%s",
+					(int)players->size( ), (int)items->size( ), (int)projectiles->size( ),
+					needs_visibility ? "yes" : "no", needs_hitboxes ? "yes" : "no" );
+			}
+		}
+	}
+
+	std::shared_ptr<const std::vector<collector::player>> collector::players( ) const
+	{
+		std::shared_lock lock( this->m_mutex );
+		return this->m_players;
+	}
+
+	std::shared_ptr<const std::vector<collector::item>> collector::items( ) const
+	{
+		std::shared_lock lock( this->m_mutex );
+		return this->m_items;
+	}
+
+	std::shared_ptr<const std::vector<collector::projectile>> collector::projectiles( ) const
+	{
+		std::shared_lock lock( this->m_mutex );
+		return this->m_projectiles;
+	}
+
+	void collector::collect_players( const std::vector<entities::cached>& raw, bool needs_visibility, bool needs_hitboxes )
+	{
+		const auto view_origin = systems::g_view.origin( );
+		const auto local_pawn = systems::g_local.view_pawn( );
+		const auto needs_info = settings::g_esp.m_player.m_info_flags.enabled;
+
+		int player_count = 0;
+		for ( const auto& e : raw )
+			if ( e.type == entities::type::player ) ++player_count;
+
+		std::vector<player> fresh{};
+		fresh.reserve( player_count );
+		int skipped_no_pawn_handle = 0;
+		int skipped_no_pawn = 0;
+		int skipped_local = 0;
+		int skipped_scene_node = 0;
+		int skipped_distance = 0;
+		int skipped_dead = 0;
+
 		for ( const auto& entry : raw )
 		{
 			if ( entry.type != entities::type::player )
+				continue;
+
+			const auto pawn_handle = read_player_pawn_handle( entry.ptr );
+			if ( !pawn_handle )
 			{
+				++skipped_no_pawn_handle;
 				continue;
 			}
 
-			const auto player_pawn_handle = g::memory.read<std::uint32_t>( entry.ptr + SCHEMA( "CCSPlayerController", "m_hPlayerPawn"_hash ) );
-			if ( !player_pawn_handle )
+			const auto pawn = systems::g_entities.lookup( pawn_handle );
+			if ( !pawn )
 			{
+				++skipped_no_pawn;
 				continue;
 			}
 
-			const auto player_pawn = systems::g_entities.lookup( player_pawn_handle );
-			if ( !player_pawn || player_pawn == systems::g_local.view_pawn( ) )
+			if ( pawn == local_pawn )
 			{
+				++skipped_local;
 				continue;
 			}
 
-			const auto health = g::memory.read<std::int32_t>( player_pawn + SCHEMA( "C_BaseEntity", "m_iHealth"_hash ) );
+			const auto scene_node = g::memory.read<std::uintptr_t>( pawn + SCHEMA( "C_BaseEntity", "m_pGameSceneNode"_hash ) );
+			if ( !scene_node )
+			{
+				++skipped_scene_node;
+				continue;
+			}
+
+			const auto origin = g::memory.read<math::vector3>( scene_node + SCHEMA( "CGameSceneNode", "m_vecAbsOrigin"_hash ) );
+			const auto distance_m = view_origin.distance( origin ) * constants::esp::k_distance_scaling;
+			if ( distance_m > constants::esp::k_max_esp_distance )
+			{
+				++skipped_distance;
+				continue;
+			}
+
+			const auto health = g::memory.read<std::int32_t>( pawn + SCHEMA( "C_BaseEntity", "m_iHealth"_hash ) );
 			if ( health <= 0 )
 			{
+				++skipped_dead;
 				continue;
 			}
+
+			const auto team = g::memory.read<std::int32_t>( pawn + SCHEMA( "C_BaseEntity", "m_iTeamNum"_hash ) );
 
 			player p{};
 			p.controller = entry.ptr;
-			p.pawn = player_pawn;
+			p.pawn = pawn;
+			p.game_scene_node = scene_node;
+			p.origin = origin;
 			p.health = health;
-			p.team = g::memory.read<std::int32_t>( player_pawn + SCHEMA( "C_BaseEntity", "m_iTeamNum"_hash ) );
-			p.invulnerable = g::memory.read<bool>( player_pawn + SCHEMA( "C_CSPlayerPawn", "m_bGunGameImmunity"_hash ) );
-			p.armor = g::memory.read<std::int32_t>( player_pawn + SCHEMA( "C_CSPlayerPawn", "m_ArmorValue"_hash ) );
-			p.is_scoped = g::memory.read<bool>( player_pawn + SCHEMA( "C_CSPlayerPawn", "m_bIsScoped"_hash ) );
-			p.is_defusing = g::memory.read<bool>( player_pawn + SCHEMA( "C_CSPlayerPawn", "m_bIsDefusing"_hash ) );
-			p.is_flashed = g::memory.read<float>( player_pawn + SCHEMA( "C_CSPlayerPawnBase", "m_flFlashBangTime"_hash ) ) > 0.0f;
-			p.ping = g::memory.read<std::int32_t>( entry.ptr + SCHEMA( "CCSPlayerController", "m_iPing"_hash ) );
+			p.team = team;
+			p.is_visible = true;
 
-			const auto game_scene_node = g::memory.read<std::uintptr_t>( player_pawn + SCHEMA( "C_BaseEntity", "m_pGameSceneNode"_hash ) );
-			if ( game_scene_node )
+			p.bone_cache = g::memory.read<std::uintptr_t>( scene_node + SCHEMA( "CSkeletonInstance", "m_modelState"_hash ) + 0x80 );
+
+			if ( needs_visibility && p.bone_cache && p.bone_cache >= 0x10000 )
 			{
-				p.game_scene_node = game_scene_node;
-				p.bone_cache = g::memory.read<std::uintptr_t>( game_scene_node + SCHEMA( "CSkeletonInstance", "m_modelState"_hash ) + 0x80 );
-				p.origin = g::memory.read<math::vector3>( game_scene_node + SCHEMA( "CGameSceneNode", "m_vecAbsOrigin"_hash ) );
-
-				if ( needs_visibility )
-				{
-					const auto head = systems::g_bones.get( p.bone_cache ).get_position( 6 );
-					p.is_visible = !systems::g_bvh.trace_ray( systems::g_view.origin( ), head ).hit;
-				}
-				else
-				{
-					p.is_visible = true;
-				}
-
-				if ( needs_hitboxes )
-				{
-					p.hitboxes = systems::g_hitboxes.query( game_scene_node );
-				}
+				const auto head = systems::g_bones.get_head_position( p.bone_cache );
+				if ( head.has_value( ) )
+					p.is_visible = !systems::g_bvh.trace_ray( view_origin, head.value( ) ).hit;
 			}
 
-			const auto item_services = g::memory.read<std::uintptr_t>( player_pawn + SCHEMA( "C_BasePlayerPawn", "m_pItemServices"_hash ) );
-			if ( item_services )
+			if ( needs_hitboxes && p.bone_cache && p.bone_cache >= 0x10000 && distance_m < constants::esp::k_max_bone_distance )
+				p.hitboxes = systems::g_hitboxes.query( scene_node );
+
+			p.armor = g::memory.read<std::int32_t>( pawn + SCHEMA( "C_CSPlayerPawn", "m_ArmorValue"_hash ) );
+			p.is_scoped = g::memory.read<bool>( pawn + SCHEMA( "C_CSPlayerPawn", "m_bIsScoped"_hash ) );
+			p.is_defusing = g::memory.read<bool>( pawn + SCHEMA( "C_CSPlayerPawn", "m_bIsDefusing"_hash ) );
+			p.is_flashed = g::memory.read<float>( pawn + SCHEMA( "C_BasePlayerPawnBase", "m_flFlashBangTime"_hash ) ) > 0.0f;
+			p.invulnerable = g::memory.read<bool>( pawn + SCHEMA( "C_CSPlayerPawn", "m_bGunGameImmunity"_hash ) );
+
+			if ( needs_info )
 			{
-				p.has_helmet = g::memory.read<bool>( item_services + SCHEMA( "CCSPlayer_ItemServices", "m_bHasHelmet"_hash ) );
-				p.has_defuser = g::memory.read<bool>( item_services + SCHEMA( "CCSPlayer_ItemServices", "m_bHasDefuser"_hash ) );
+				p.ping = g::memory.read<std::int32_t>( entry.ptr + SCHEMA( "CCSPlayerController", "m_iPing"_hash ) );
+
+				const auto item_services = g::memory.read<std::uintptr_t>( pawn + SCHEMA( "C_BasePlayerPawn", "m_pItemServices"_hash ) );
+				if ( item_services )
+				{
+					p.has_helmet = g::memory.read<bool>( item_services + SCHEMA( "CCSPlayer_ItemServices", "m_bHasHelmet"_hash ) );
+					p.has_defuser = g::memory.read<bool>( item_services + SCHEMA( "CCSPlayer_ItemServices", "m_bHasDefuser"_hash ) );
+				}
+
+				const auto money_services = g::memory.read<std::uintptr_t>( entry.ptr + SCHEMA( "CCSPlayerController", "m_pInGameMoneyServices"_hash ) );
+				if ( money_services )
+					p.money = g::memory.read<std::int32_t>( money_services + SCHEMA( "CCSPlayerController_InGameMoneyServices", "m_iAccount"_hash ) );
 			}
 
-			const auto weapon_services = g::memory.read<std::uintptr_t>( player_pawn + SCHEMA( "C_BasePlayerPawn", "m_pWeaponServices"_hash ) );
+			const auto weapon_services = g::memory.read<std::uintptr_t>( pawn + SCHEMA( "C_BasePlayerPawn", "m_pWeaponServices"_hash ) );
 			if ( weapon_services )
 			{
-				const auto active_weapon_handle = g::memory.read<std::uint32_t>( weapon_services + SCHEMA( "CPlayer_WeaponServices", "m_hActiveWeapon"_hash ) );
-				if ( active_weapon_handle && active_weapon_handle != 0xFFFFFFFF )
+				const auto weapon_handle = g::memory.read<std::uint32_t>( weapon_services + SCHEMA( "CPlayer_WeaponServices", "m_hActiveWeapon"_hash ) );
+				if ( weapon_handle && weapon_handle != 0xFFFFFFFF )
 				{
-					p.weapon.ptr = systems::g_entities.lookup( active_weapon_handle );
+					p.weapon.ptr = systems::g_entities.lookup( weapon_handle );
 					if ( p.weapon.ptr )
 					{
 						p.weapon.vdata = g::memory.read<std::uintptr_t>( p.weapon.ptr + SCHEMA( "C_BaseEntity", "m_nSubclassID"_hash ) + 0x8 );
@@ -132,158 +211,151 @@ namespace systems {
 							p.weapon.ammo = g::memory.read<std::int32_t>( p.weapon.ptr + SCHEMA( "C_BasePlayerWeapon", "m_iClip1"_hash ) );
 							p.weapon.max_ammo = g::memory.read<std::int32_t>( p.weapon.vdata + SCHEMA( "CBasePlayerWeaponVData", "m_iMaxClip1"_hash ) );
 
-							const auto weapon_name_ptr = g::memory.read<std::uintptr_t>( p.weapon.vdata + SCHEMA( "CCSWeaponBaseVData", "m_szName"_hash ) );
-							if ( weapon_name_ptr )
+							const auto name_ptr = g::memory.read<std::uintptr_t>( p.weapon.vdata + SCHEMA( "CCSWeaponBaseVData", "m_szName"_hash ) );
+							if ( name_ptr )
 							{
-								p.weapon.name = g::memory.read_string( weapon_name_ptr, 64 );
+								p.weapon.name = g::memory.read_string( name_ptr, 64 );
 								if ( p.weapon.name.starts_with( "weapon_" ) )
-								{
 									p.weapon.name.erase( 0, 7 );
-								}
 							}
 						}
 					}
 				}
 			}
 
-			const auto name_ptr = g::memory.read<std::uintptr_t>( entry.ptr + SCHEMA( "CCSPlayerController", "m_sSanitizedPlayerName"_hash ) );
-			if ( name_ptr )
+			if ( needs_info )
 			{
-				p.display_name = g::memory.read_string( name_ptr, 128 );
-				std::ranges::transform( p.display_name, p.display_name.begin( ), [ ]( unsigned char c ) { return std::tolower( c ); } );
-			}
-
-			const auto money_services = g::memory.read<std::uintptr_t>( entry.ptr + SCHEMA( "CCSPlayerController", "m_pInGameMoneyServices"_hash ) );
-			if ( money_services )
-			{
-				p.money = g::memory.read<std::int32_t>( money_services + SCHEMA( "CCSPlayerController_InGameMoneyServices", "m_iAccount"_hash ) );
+				const auto name_ptr = g::memory.read<std::uintptr_t>( entry.ptr + SCHEMA( "CCSPlayerController", "m_sSanitizedPlayerName"_hash ) );
+				if ( name_ptr )
+				{
+					p.display_name = g::memory.read_string( name_ptr, 128 );
+					std::ranges::transform( p.display_name, p.display_name.begin( ), []( unsigned char c ) { return std::tolower( c ); } );
+				}
 			}
 
 			fresh.push_back( std::move( p ) );
 		}
 
-		{
-			const auto view_origin = systems::g_view.origin( );
-			std::ranges::sort( fresh, [ &view_origin ]( const player& a, const player& b ) { return view_origin.distance( a.origin ) > view_origin.distance( b.origin ); } );
-		}
+		std::ranges::sort( fresh, [&view_origin]( const player& a, const player& b ) { return view_origin.distance( a.origin ) > view_origin.distance( b.origin ); } );
 
 		std::unique_lock lock( this->m_mutex );
-		this->m_players = std::move( fresh );
+		this->m_players = std::make_shared<const std::vector<player>>( std::move( fresh ) );
+		static std::uint32_t s_pipeline_log_counter = 0;
+		++s_pipeline_log_counter;
+		if ( ( s_pipeline_log_counter % 120 ) == 0 || !this->m_players->empty( ) )
+		{
+			LOG( logger::category::collector, "Players pipeline: raw=%d, kept=%d, no_pawn_handle=%d, bad_pawn=%d, local=%d, no_scene=%d, far=%d, dead=%d",
+				player_count, (int)this->m_players->size( ), skipped_no_pawn_handle, skipped_no_pawn, skipped_local, skipped_scene_node, skipped_distance, skipped_dead );
+		}
 	}
 
 	void collector::collect_items( const std::vector<entities::cached>& raw )
 	{
+		const auto view_origin = systems::g_view.origin( );
+		const auto max_dist = settings::g_esp.m_item.max_distance;
+
+		int item_count = 0;
+		for ( const auto& e : raw )
+			if ( e.type == entities::type::item ) ++item_count;
+
 		std::vector<item> fresh{};
-		fresh.reserve( 64 );
+		fresh.reserve( item_count );
 
 		for ( const auto& entry : raw )
 		{
 			if ( entry.type != entities::type::item )
-			{
 				continue;
-			}
 
 			const auto subtype = classify_item( entry.schema_hash );
 			if ( subtype == item_subtype::unknown )
-			{
 				continue;
-			}
 
-			const auto owner_handle = g::memory.read<std::uint32_t>( entry.ptr + SCHEMA( "C_BaseEntity", "m_hOwnerEntity"_hash ) );
-			if ( owner_handle && owner_handle != 0xffffffff )
-			{
+			const auto owner = g::memory.read<std::uint32_t>( entry.ptr + SCHEMA( "C_BaseEntity", "m_hOwnerEntity"_hash ) );
+			if ( owner && owner != 0xffffffff )
 				continue;
-			}
 
-			const auto game_scene_node = g::memory.read<std::uintptr_t>( entry.ptr + SCHEMA( "C_BaseEntity", "m_pGameSceneNode"_hash ) );
-			if ( !game_scene_node )
-			{
+			const auto scene_node = g::memory.read<std::uintptr_t>( entry.ptr + SCHEMA( "C_BaseEntity", "m_pGameSceneNode"_hash ) );
+			if ( !scene_node )
 				continue;
-			}
+
+			const auto origin = g::memory.read<math::vector3>( scene_node + SCHEMA( "CGameSceneNode", "m_vecAbsOrigin"_hash ) );
+			const auto distance_m = view_origin.distance( origin ) * constants::esp::k_distance_scaling;
+			if ( distance_m > max_dist )
+				continue;
 
 			item i{};
 			i.entity = entry.ptr;
-			i.game_scene_node = game_scene_node;
+			i.game_scene_node = scene_node;
 			i.subtype = subtype;
-			i.origin = g::memory.read<math::vector3>( game_scene_node + SCHEMA( "CGameSceneNode", "m_vecAbsOrigin"_hash ) );
+			i.origin = origin;
 			i.ammo = g::memory.read<std::int32_t>( entry.ptr + SCHEMA( "C_BasePlayerWeapon", "m_iClip1"_hash ) );
 
-			const auto weapon_vdata = g::memory.read<std::uintptr_t>( entry.ptr + SCHEMA( "C_BaseEntity", "m_nSubclassID"_hash ) + 0x8 );
-			if ( weapon_vdata )
-			{
-				i.max_ammo = g::memory.read<std::int32_t>( weapon_vdata + SCHEMA( "CBasePlayerWeaponVData", "m_iMaxClip1"_hash ) );
-			}
+			const auto vdata = g::memory.read<std::uintptr_t>( entry.ptr + SCHEMA( "C_BaseEntity", "m_nSubclassID"_hash ) + 0x8 );
+			if ( vdata )
+				i.max_ammo = g::memory.read<std::int32_t>( vdata + SCHEMA( "CBasePlayerWeaponVData", "m_iMaxClip1"_hash ) );
 
 			fresh.push_back( std::move( i ) );
 		}
 
-		{
-			const auto view_origin = systems::g_view.origin( );
-			std::ranges::sort( fresh, [ &view_origin ]( const item& a, const item& b ) { return view_origin.distance( a.origin ) > view_origin.distance( b.origin ); } );
-		}
+		std::ranges::sort( fresh, [&view_origin]( const item& a, const item& b ) { return view_origin.distance( a.origin ) > view_origin.distance( b.origin ); } );
 
 		std::unique_lock lock( this->m_mutex );
-		this->m_items = std::move( fresh );
+		this->m_items = std::make_shared<const std::vector<item>>( std::move( fresh ) );
 	}
 
 	void collector::collect_projectiles( const std::vector<entities::cached>& raw )
 	{
+		const auto view_origin = systems::g_view.origin( );
+		constexpr auto max_dist = constants::esp::k_max_esp_distance;
+
+		int proj_count = 0;
+		for ( const auto& e : raw )
+			if ( e.type == entities::type::projectile ) ++proj_count;
+
 		std::vector<projectile> fresh{};
-		fresh.reserve( 32 );
+		fresh.reserve( proj_count );
 
 		for ( const auto& entry : raw )
 		{
 			if ( entry.type != entities::type::projectile )
-			{
 				continue;
-			}
 
 			const auto subtype = classify_projectile( entry.schema_hash );
 			if ( subtype == projectile_subtype::unknown )
-			{
 				continue;
-			}
 
 			if ( subtype == projectile_subtype::molotov_fire )
 			{
 				const auto fire_count = g::memory.read<int>( entry.ptr + SCHEMA( "C_Inferno", "m_fireCount"_hash ) );
 				if ( fire_count <= 0 )
-				{
 					continue;
-				}
 
-				const auto fire_positions_base = entry.ptr + SCHEMA( "C_Inferno", "m_firePositions"_hash );
-				const auto fire_active_base = entry.ptr + SCHEMA( "C_Inferno", "m_bFireIsBurning"_hash );
+				const auto fire_pos_base = entry.ptr + SCHEMA( "C_Inferno", "m_firePositions"_hash );
+				const auto fire_act_base = entry.ptr + SCHEMA( "C_Inferno", "m_bFireIsBurning"_hash );
 
 				std::vector<math::vector3> fire_points{};
 				fire_points.reserve( std::min( fire_count, 64 ) );
 
 				for ( int i = 0; i < std::min( fire_count, 64 ); ++i )
 				{
-					if ( !g::memory.read<bool>( fire_active_base + i ) )
-					{
+					if ( !g::memory.read<bool>( fire_act_base + i ) )
 						continue;
-					}
-
-					fire_points.push_back( g::memory.read<math::vector3>( fire_positions_base + i * sizeof( math::vector3 ) ) );
+					fire_points.push_back( g::memory.read<math::vector3>( fire_pos_base + i * sizeof( math::vector3 ) ) );
 				}
 
 				if ( fire_points.empty( ) )
-				{
 					continue;
-				}
 
 				auto center = math::vector3{};
-
 				for ( const auto& pt : fire_points )
-				{
 					center = center + pt;
-				}
-
 				center = center * ( 1.0f / static_cast< float >( fire_points.size( ) ) );
 
+				const auto center_distance_m = view_origin.distance( center ) * constants::esp::k_distance_scaling;
+				if ( center_distance_m > max_dist )
+					continue;
+
 				const auto effect_tick = g::memory.read<std::int32_t>( entry.ptr + SCHEMA( "C_Inferno", "m_nFireEffectTickBegin"_hash ) );
-				const auto start_time = static_cast< float >( effect_tick ) * ( 1.0f / 64.0f );
 				constexpr auto inferno_duration = 7.0f;
 
 				projectile p{};
@@ -291,23 +363,26 @@ namespace systems {
 				p.subtype = subtype;
 				p.origin = center;
 				p.fire_points = std::move( fire_points );
-				p.expire_time = start_time + inferno_duration;
+				p.expire_time = static_cast< float >( effect_tick ) * ( 1.0f / 64.0f ) + inferno_duration;
 
 				fresh.push_back( std::move( p ) );
 				continue;
 			}
 
-			const auto game_scene_node = g::memory.read<std::uintptr_t>( entry.ptr + SCHEMA( "C_BaseEntity", "m_pGameSceneNode"_hash ) );
-			if ( !game_scene_node )
-			{
+			const auto scene_node = g::memory.read<std::uintptr_t>( entry.ptr + SCHEMA( "C_BaseEntity", "m_pGameSceneNode"_hash ) );
+			if ( !scene_node )
 				continue;
-			}
+
+			const auto origin = g::memory.read<math::vector3>( scene_node + SCHEMA( "CGameSceneNode", "m_vecAbsOrigin"_hash ) );
+			const auto distance_m = view_origin.distance( origin ) * constants::esp::k_distance_scaling;
+			if ( distance_m > max_dist )
+				continue;
 
 			projectile p{};
 			p.entity = entry.ptr;
-			p.game_scene_node = game_scene_node;
+			p.game_scene_node = scene_node;
 			p.subtype = subtype;
-			p.origin = g::memory.read<math::vector3>( game_scene_node + SCHEMA( "CGameSceneNode", "m_vecAbsOrigin"_hash ) );
+			p.origin = origin;
 			p.velocity = g::memory.read<math::vector3>( entry.ptr + SCHEMA( "C_BaseEntity", "m_vecAbsVelocity"_hash ) );
 			p.thrower_handle = g::memory.read<std::uint32_t>( entry.ptr + SCHEMA( "C_BaseGrenade", "m_hThrower"_hash ) );
 			p.bounces = g::memory.read<std::int32_t>( entry.ptr + SCHEMA( "C_BaseCSGrenadeProjectile", "m_nBounces"_hash ) );
@@ -330,13 +405,10 @@ namespace systems {
 			fresh.push_back( std::move( p ) );
 		}
 
-		{
-			const auto view_origin = systems::g_view.origin( );
-			std::ranges::sort( fresh, [ &view_origin ]( const projectile& a, const projectile& b ) { return view_origin.distance( a.origin ) > view_origin.distance( b.origin ); } );
-		}
+		std::ranges::sort( fresh, [&view_origin]( const projectile& a, const projectile& b ) { return view_origin.distance( a.origin ) > view_origin.distance( b.origin ); } );
 
 		std::unique_lock lock( this->m_mutex );
-		this->m_projectiles = std::move( fresh );
+		this->m_projectiles = std::make_shared<const std::vector<projectile>>( std::move( fresh ) );
 	}
 
 	collector::item_subtype collector::classify_item( std::uint32_t schema_hash )

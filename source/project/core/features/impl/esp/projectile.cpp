@@ -12,7 +12,8 @@ namespace features::esp {
 
 		const auto current_time = g::memory.read<float>( g::memory.read<std::uintptr_t>( g::offsets.global_vars ) + 0x30 );
 
-		for ( const auto& proj : systems::g_collector.projectiles( ) )
+		const auto projectiles = systems::g_collector.projectiles( );
+		for ( const auto& proj : *projectiles )
 		{
 			if ( proj.origin.length_sqr( ) < 1.0f )
 			{

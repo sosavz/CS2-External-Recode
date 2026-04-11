@@ -6,26 +6,37 @@ namespace systems {
 	{
 		set result{};
 
+		if ( !game_scene_node || game_scene_node < 0x10000 )
+		{
+			return result;
+		}
+
 		const auto model_handle = g::memory.read<std::uintptr_t>( game_scene_node + 0x200 );
-		if ( !model_handle )
+		if ( !model_handle || model_handle < 0x10000 )
 		{
 			return result;
 		}
 
 		const auto cmodel = g::memory.read<std::uintptr_t>( model_handle );
-		if ( !cmodel )
+		if ( !cmodel || cmodel < 0x10000 )
 		{
 			return result;
 		}
 
-		const auto render_meshes = g::memory.read<std::uintptr_t>( g::memory.read<std::uintptr_t>( cmodel + 0x78 ) );
-		if ( !render_meshes )
+		const auto render_meshes_ptr = g::memory.read<std::uintptr_t>( cmodel + 0x78 );
+		if ( !render_meshes_ptr || render_meshes_ptr < 0x10000 )
+		{
+			return result;
+		}
+
+		const auto render_meshes = g::memory.read<std::uintptr_t>( render_meshes_ptr );
+		if ( !render_meshes || render_meshes < 0x10000 )
 		{
 			return result;
 		}
 
 		const auto hitbox_data = g::memory.read<std::uintptr_t>( render_meshes + 0x150 );
-		if ( !hitbox_data )
+		if ( !hitbox_data || hitbox_data < 0x10000 )
 		{
 			return result;
 		}
@@ -37,7 +48,7 @@ namespace systems {
 		}
 
 		const auto array_ptr = g::memory.read<std::uintptr_t>( hitbox_data + 0x30 );
-		if ( !array_ptr )
+		if ( !array_ptr || array_ptr < 0x10000 )
 		{
 			return result;
 		}
@@ -61,6 +72,11 @@ namespace systems {
 			if ( bone == -1 )
 			{
 				continue;
+			}
+
+			if ( result.count >= static_cast<int>( result.entries.size( ) ) )
+			{
+				break;
 			}
 
 			const auto offset = i * k_hitbox_stride;

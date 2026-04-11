@@ -12,7 +12,8 @@ namespace features::esp {
 
 		const auto view_origin = systems::g_view.origin( );
 
-		for ( const auto& item : systems::g_collector.items( ) )
+		const auto items = systems::g_collector.items( );
+		for ( const auto& item : *items )
 		{
 			const auto distance = view_origin.distance( item.origin ) * 0.01905f;
 			if ( distance > cfg.max_distance )

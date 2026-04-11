@@ -140,6 +140,12 @@ memory::~memory( )
 		::CloseHandle( static_cast< HANDLE >( this->m_handle ) );
 		this->m_handle = nullptr;
 	}
+
+	{
+		std::unique_lock lock( this->m_cache_mutex );
+		this->m_module_cache.clear( );
+		this->m_module_size_cache.clear( );
+	}
 }
 
 bool memory::initialize( std::wstring_view process_name )
@@ -212,6 +218,14 @@ bool memory::read( std::uintptr_t address, void* buffer, std::size_t size ) cons
 
 std::uintptr_t memory::get_module( std::string_view name ) const
 {
+	{
+		std::shared_lock lock( this->m_cache_mutex );
+		if ( const auto it = this->m_module_cache.find( std::string( name ) ); it != this->m_module_cache.end( ) )
+		{
+			return it->second;
+		}
+	}
+
 	const auto snap = ::CreateToolhelp32Snapshot( TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, this->m_id );
 	if ( snap == INVALID_HANDLE_VALUE )
 	{
@@ -245,6 +259,13 @@ std::uintptr_t memory::get_module( std::string_view name ) const
 	}
 
 	::CloseHandle( snap );
+
+	if ( result )
+	{
+		std::unique_lock lock( this->m_cache_mutex );
+		this->m_module_cache[ std::string( name ) ] = result;
+	}
+
 	return result;
 }
 
@@ -266,6 +287,14 @@ bool memory::process_alive( ) const
 
 std::size_t memory::get_module_size( std::uintptr_t module_base ) const
 {
+	{
+		std::shared_lock lock( this->m_cache_mutex );
+		if ( const auto it = this->m_module_size_cache.find( module_base ); it != this->m_module_size_cache.end( ) )
+		{
+			return it->second;
+		}
+	}
+
 	const auto snap = ::CreateToolhelp32Snapshot( TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, this->m_id );
 	if ( snap == INVALID_HANDLE_VALUE )
 	{
@@ -288,6 +317,13 @@ std::size_t memory::get_module_size( std::uintptr_t module_base ) const
 	}
 
 	::CloseHandle( snap );
+
+	if ( result )
+	{
+		std::unique_lock lock( this->m_cache_mutex );
+		this->m_module_size_cache[ module_base ] = result;
+	}
+
 	return result;
 }
 
@@ -295,9 +331,13 @@ std::string memory::read_string( std::uintptr_t address, std::size_t max_len ) c
 {
 	char buffer[ 256 ]{};
 	const auto len = std::min( max_len, sizeof( buffer ) - 1 );
-	this->read( address, buffer, len );
+	if ( !this->read( address, buffer, len ) )
+	{
+		return {};
+	}
 	buffer[ len ] = '\0';
-	return buffer;
+	const auto end = std::find( buffer, buffer + len, '\0' );
+	return std::string( buffer, end );
 }
 
 std::uintptr_t memory::find_pattern( std::uintptr_t module_base, std::string_view pattern ) const

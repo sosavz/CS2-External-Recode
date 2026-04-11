@@ -1,47 +1,136 @@
 #include <stdafx.hpp>
+#include <utils/logger/logger.hpp>
 
 namespace systems {
 
+	/*
+	 * Entity List Structure:
+	 * - CS2 maintains an array of 2048 entity slots
+	 * - Each slot contains a pointer to an entity object
+	 * - Entity pointers are stored in a hierarchical structure:
+	 *   - First level: chunk index (slot >> 9)
+	 *   - Second level: entry within chunk (slot & 0x1FF)
+	 * - Each entry is 112 bytes
+	 *
+	 * Handle System:
+	 * - Entities reference each other via handles (m_hOwnerEntity, etc.)
+	 * - Handle = (chunk_index << 9) | entry_index
+	 * - To lookup: extract chunk, get pointer, extract entry index, read entity
+	 */
+
 	void entities::refresh( )
 	{
+		++m_frame_counter;
+		
 		const auto entity_list = this->get_entity_list( );
 		if ( !entity_list )
 		{
+			LOG( logger::category::entity, "Entity list is null" );
 			std::unique_lock lock( this->m_mutex );
-			this->m_entities.clear( );
+			this->m_entities = std::make_shared<const std::vector<cached>>( );
 			return;
 		}
 
 		std::vector<cached> fresh{};
 		fresh.reserve( 128 );
 
-		for ( std::int32_t i = 0; i < 2048; ++i )
+		int player_count = 0;
+		int item_count = 0;
+		int projectile_count = 0;
+		int invalid_count = 0;
+		constexpr auto chunk_count = constants::entities::k_max_entity_slots / constants::entities::k_entity_chunk_size;
+		std::array<std::uintptr_t, chunk_count> chunk_entries{};
+
+		for ( std::int32_t chunk = 0; chunk < chunk_count; ++chunk )
 		{
-			const auto entity = this->get_by_index( entity_list, i );
+			chunk_entries[ chunk ] = g::memory.read<std::uintptr_t>(
+				entity_list + ( static_cast< std::uintptr_t >( chunk ) * 8 ) + constants::entities::k_entity_list_pointer_offset
+			);
+		}
+
+		const auto force_revalidate = ( m_frame_counter % 120 ) == 0;
+
+		for ( std::int32_t i = 0; i < constants::entities::k_max_entity_slots; ++i )
+		{
+			const auto chunk_index = i >> constants::entities::k_entity_chunk_index_shift;
+			const auto list_entry = chunk_entries[ chunk_index ];
+			if ( !list_entry )
+			{
+				++invalid_count;
+				this->m_slot_cache[ i ] = {};
+				continue;
+			}
+
+			const auto entity = g::memory.read<std::uintptr_t>(
+				list_entry + ( static_cast< std::uintptr_t >( i & constants::entities::k_entity_handle_index_mask ) * constants::entities::k_entity_entry_size )
+			);
 			if ( !entity )
 			{
+				++invalid_count;
+				this->m_slot_cache[ i ] = {};
 				continue;
 			}
 
-			const auto schema_hash = this->get_schema_hash( entity );
-			if ( !schema_hash )
+			auto& slot = this->m_slot_cache[ i ];
+			std::uint32_t schema_hash{};
+			type entity_type{ type::unknown };
+
+			if ( !force_revalidate && slot.ptr == entity && slot.schema_hash )
 			{
-				continue;
+				schema_hash = slot.schema_hash;
+				entity_type = slot.type;
+			}
+			else
+			{
+				schema_hash = this->get_schema_hash( entity );
+				if ( !schema_hash )
+				{
+					++invalid_count;
+					slot = { .ptr = entity, .schema_hash = 0, .type = type::unknown };
+					continue;
+				}
+
+				entity_type = this->classify( schema_hash );
+				slot = { .ptr = entity, .schema_hash = schema_hash, .type = entity_type };
 			}
 
-			const auto entity_type = this->classify( schema_hash );
 			if ( entity_type == type::unknown )
 			{
+				++invalid_count;
 				continue;
+			}
+
+			switch ( entity_type )
+			{
+			case type::player: ++player_count; break;
+			case type::item: ++item_count; break;
+			case type::projectile: ++projectile_count; break;
+			default: break;
 			}
 
 			fresh.push_back( { .ptr = entity, .schema_hash = schema_hash, .index = static_cast< std::int16_t >( i ), .type = entity_type } );
 		}
 
+		const auto total_entities = static_cast< int >( fresh.size( ) );
+
 		std::unique_lock lock( this->m_mutex );
-		this->m_entities = std::move( fresh );
+		this->m_entities = std::make_shared<const std::vector<cached>>( std::move( fresh ) );
+
+		if ( ( m_frame_counter % 120 ) == 0 || player_count > 1 )
+		{
+			LOG( logger::category::entity, "Frame %d: players=%d, items=%d, projectiles=%d, invalid=%d, total_entities=%d",
+				m_frame_counter, player_count, item_count, projectile_count, invalid_count, total_entities );
+		}
 	}
 
+	/*
+	 * Handle Lookup:
+	 * 1. Extract chunk index from handle (bits 9-14: (handle >> 9) & 0x7F)
+	 * 2. Read pointer to chunk from entity_list + chunk_index * 8 + 0x10
+	 * 3. Extract entry index from handle (bits 0-8: handle & 0x1FF)
+	 * 4. Read entity pointer from chunk + entry_index * 112
+	 * 5. Validate entity pointer (> 0x10000 to filter invalid/low addresses)
+	 */
 	std::uintptr_t entities::lookup( std::uint32_t handle ) const
 	{
 		if ( !handle || handle == 0xffffffff )
@@ -75,9 +164,9 @@ namespace systems {
 		std::shared_lock lock( this->m_mutex );
 
 		std::vector<cached> result{};
-		result.reserve( this->m_entities.size( ) );
+		result.reserve( this->m_entities->size( ) );
 
-		for ( const auto& entry : this->m_entities )
+		for ( const auto& entry : *this->m_entities )
 		{
 			if ( entry.type == filter )
 			{
@@ -88,7 +177,7 @@ namespace systems {
 		return result;
 	}
 
-	std::vector<entities::cached> entities::all( ) const
+	std::shared_ptr<const std::vector<entities::cached>> entities::all( ) const
 	{
 		std::shared_lock lock( this->m_mutex );
 		return this->m_entities;

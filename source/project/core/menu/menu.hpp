@@ -7,7 +7,8 @@ public:
 	[[nodiscard]] bool is_open( ) const noexcept { return this->m_open; }
 
 private:
-	enum class tab : int { combat = 0, esp, misc, config, count };
+	enum class tab : int { combat = 0, esp, misc, config, dev, count };
+	enum class esp_panel : int { player = 0, items, projectiles };
 
 	void draw_header( float width, float height );
 	void draw_content( float width, float height );
@@ -17,6 +18,7 @@ private:
 	void draw_esp( );
 	void draw_misc( );
 	void draw_config( );
+	void draw_dev( );
 
 	tab m_tab{ tab::combat };
 	bool m_open{ true };
@@ -28,6 +30,7 @@ private:
 
 	static constexpr const char* k_weapon_groups[ ]{ "pistol", "smg", "rifle", "shotgun", "sniper", "lmg" };
 	int m_weapon_group{ 0 };
+	esp_panel m_esp_panel{ esp_panel::player };
 	std::string m_cfg_name{ "default" };
 	int m_cfg_selected{ 0 };
 };

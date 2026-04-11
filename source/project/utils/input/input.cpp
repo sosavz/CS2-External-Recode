@@ -2,76 +2,100 @@
 
 bool input::initialize( )
 {
-	const auto win32u = GetModuleHandleA( "win32u.dll" );
-	if ( !win32u )
-	{
-		return false;
-	}
-
-	this->m_inject_mouse = reinterpret_cast< fn_inject_mouse >( GetProcAddress( win32u, "NtUserInjectMouseInput" ) );
-	this->m_inject_keyboard = reinterpret_cast< fn_inject_keyboard >( GetProcAddress( win32u, "NtUserInjectKeyboardInput" ) );
-
-	return this->m_inject_mouse && this->m_inject_keyboard;
+	return true;
 }
 
-void input::inject_mouse( int x, int y, std::uint8_t buttons ) const
+void input::inject_mouse( int x, int y, std::uint8_t buttons )
 {
-	if ( !this->m_inject_mouse )
-	{
-		return;
-	}
-
-	unsigned long flags{ 0 };
+	INPUT inputs[ 4 ]{};
+	int count = 0;
+	bool left_down_sent = false;
+	bool left_up_sent = false;
+	bool right_down_sent = false;
+	bool right_up_sent = false;
 
 	if ( buttons & mouse_buttons::move )
 	{
-		flags |= MOUSEEVENTF_MOVE;
+		inputs[ count ].type = INPUT_MOUSE;
+		inputs[ count ].mi.dx = x;
+		inputs[ count ].mi.dy = y;
+		inputs[ count ].mi.dwFlags = MOUSEEVENTF_MOVE;
+		++count;
 	}
 
 	if ( buttons & mouse_buttons::left_down )
 	{
-		flags |= MOUSEEVENTF_LEFTDOWN;
+		inputs[ count ].type = INPUT_MOUSE;
+		inputs[ count ].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+		++count;
+		left_down_sent = true;
 	}
 
 	if ( buttons & mouse_buttons::left_up )
 	{
-		flags |= MOUSEEVENTF_LEFTUP;
+		inputs[ count ].type = INPUT_MOUSE;
+		inputs[ count ].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+		++count;
+		left_up_sent = true;
 	}
 
 	if ( buttons & mouse_buttons::right_down )
 	{
-		flags |= MOUSEEVENTF_RIGHTDOWN;
+		inputs[ count ].type = INPUT_MOUSE;
+		inputs[ count ].mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
+		++count;
+		right_down_sent = true;
 	}
 
 	if ( buttons & mouse_buttons::right_up )
 	{
-		flags |= MOUSEEVENTF_RIGHTUP;
+		inputs[ count ].type = INPUT_MOUSE;
+		inputs[ count ].mi.dwFlags = MOUSEEVENTF_RIGHTUP;
+		++count;
+		right_up_sent = true;
 	}
 
-	mouse_info_t info{};
-	info.pt.x = x;
-	info.pt.y = y;
-	info.data = 0;
-	info.flags = flags;
-	info.time = 0;
-	info.extra_info = 0;
-
-	this->m_inject_mouse( &info, 1 );
+	if ( count > 0 )
+	{
+		if ( ::SendInput( count, inputs, sizeof( INPUT ) ) == static_cast< UINT >( count ) )
+		{
+			std::lock_guard lock( m_key_mutex );
+			if ( left_down_sent )
+				m_held_keys.insert( 0x01 );
+			if ( left_up_sent )
+				m_held_keys.erase( 0x01 );
+			if ( right_down_sent )
+				m_held_keys.insert( 0x02 );
+			if ( right_up_sent )
+				m_held_keys.erase( 0x02 );
+		}
+	}
 }
 
-void input::inject_keyboard( std::uint16_t key, bool pressed ) const
+void input::inject_keyboard( std::uint16_t key, bool pressed )
 {
-	if ( !this->m_inject_keyboard )
+	INPUT input{};
+	input.type = INPUT_KEYBOARD;
+	input.ki.wVk = key;
+	input.ki.wScan = static_cast< std::uint16_t >( MapVirtualKeyW( key, MAPVK_VK_TO_VSC ) );
+	input.ki.dwFlags = pressed ? 0 : KEYEVENTF_KEYUP;
+
+	if ( ::SendInput( 1, &input, sizeof( INPUT ) ) == 1 )
 	{
-		return;
+		std::lock_guard lock( m_key_mutex );
+		if ( pressed )
+			m_held_keys.insert( key );
+		else
+			m_held_keys.erase( key );
 	}
+}
 
-	keyboard_info_t info{};
-	info.vk = key;
-	info.scan = static_cast< std::uint16_t >( MapVirtualKeyW( key, MAPVK_VK_TO_VSC ) );
-	info.flags = pressed ? 0 : KEYEVENTF_KEYUP;
-	info.time = 0;
-	info.extra_info = 0;
-
-	this->m_inject_keyboard( &info, 1 );
+bool input::is_key_held( std::uint16_t key ) const
+{
+	if ( key >= 0x01 && key <= 0x06 )
+	{
+		std::lock_guard lock( m_key_mutex );
+		return m_held_keys.contains( key ) || ( ::GetAsyncKeyState( key ) & 0x8000 ) != 0;
+	}
+	return ( ::GetAsyncKeyState( key ) & 0x8000 ) != 0;
 }

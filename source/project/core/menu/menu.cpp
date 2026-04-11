@@ -1,5 +1,9 @@
 #include <stdafx.hpp>
 
+#include <fstream>
+#include <cstdarg>
+#include <ctime>
+
 void menu::draw( )
 {
 	g::config.tick( );
@@ -213,6 +217,21 @@ void menu::draw_content( float width, float height )
 			zui::pop_style_color( );
 		}
 
+		zui::spacing( 2.0f );
+
+		if ( this->m_tab == tab::dev )
+		{
+			zui::push_style_color( zui::style_color::button_border, selected );
+		}
+		if ( zui::button( "dev", nav_w - 12.0f, 34.0f ) )
+		{
+			this->m_tab = tab::dev;
+		}
+		if ( this->m_tab == tab::dev )
+		{
+			zui::pop_style_color( );
+		}
+
 		zui::spacing( 10.0f );
 		zui::end_nested_window( );
 	}
@@ -227,6 +246,7 @@ void menu::draw_content( float width, float height )
 		case tab::esp:    this->draw_esp( );    break;
 		case tab::misc:   this->draw_misc( );   break;
 		case tab::config: this->draw_config( ); break;
+		case tab::dev:    this->draw_dev( );    break;
 		default: break;
 		}
 
@@ -252,6 +272,7 @@ void menu::draw_combat( )
 	if ( zui::begin_group_box( "weapon profile", col_w ) )
 	{
 		zui::combo( "group##combat_group", this->m_weapon_group, k_weapon_groups, 6 );
+		zui::text_colored( "profile-specific legit settings", zdraw::rgba{ 170, 150, 182, 255 } );
 
 		zui::end_group_box( );
 	}
@@ -260,19 +281,19 @@ void menu::draw_combat( )
 
 	if ( zui::begin_group_box( "aimbot", col_w ) )
 	{
-		zui::checkbox( "enabled##ab", cfg.aimbot.enabled );
+		zui::checkbox( "enabled##aim", cfg.aimbot.enabled );
 		if ( cfg.aimbot.enabled )
 		{
-			zui::keybind( "key##ab", cfg.aimbot.key );
-			zui::slider_int( "fov##ab", cfg.aimbot.fov, 1, 45 );
-			zui::slider_int( "smoothing##ab", cfg.aimbot.smoothing, 0, 50 );
-			zui::checkbox( "head only##ab", cfg.aimbot.head_only );
-			zui::checkbox( "visible only##ab", cfg.aimbot.visible_only );
-			zui::checkbox( "predictive##ab", cfg.aimbot.predictive );
-			zui::checkbox( "draw fov##ab", cfg.aimbot.draw_fov );
+			zui::keybind( "key##aim", cfg.aimbot.key );
+			zui::slider_int( "fov##aim", cfg.aimbot.fov, 1, 45 );
+			zui::slider_int( "smoothing##aim", cfg.aimbot.smoothing, 0, 50 );
+			zui::checkbox( "head only##aim", cfg.aimbot.head_only );
+			zui::checkbox( "visible only##aim", cfg.aimbot.visible_only );
+			zui::checkbox( "predictive##aim", cfg.aimbot.predictive );
+			zui::checkbox( "draw fov##aim", cfg.aimbot.draw_fov );
 			if ( cfg.aimbot.draw_fov )
 			{
-				zui::color_picker( "fov color##ab", cfg.aimbot.fov_color );
+				zui::color_picker( "fov color##aim", cfg.aimbot.fov_color );
 			}
 		}
 
@@ -281,27 +302,115 @@ void menu::draw_combat( )
 
 	if ( zui::begin_group_box( "triggerbot", col_w ) )
 	{
-		zui::checkbox( "enabled##tb", cfg.triggerbot.enabled );
+		zui::checkbox( "enabled##trg", cfg.triggerbot.enabled );
 		if ( cfg.triggerbot.enabled )
 		{
-			zui::keybind( "key##tb", cfg.triggerbot.key );
-			zui::slider_float( "hitchance##tb", cfg.triggerbot.hitchance, 0.0f, 100.0f, "%.0f%%" );
-			zui::slider_int( "delay (ms)##tb", cfg.triggerbot.delay, 0, 500 );
-			zui::checkbox( "predictive##tb", cfg.triggerbot.predictive );
+			zui::keybind( "key##trg", cfg.triggerbot.key );
+			zui::slider_float( "hitchance##trg", cfg.triggerbot.hitchance, 0.0f, 100.0f, "%.0f%%" );
+			zui::slider_int( "delay ms##trg", cfg.triggerbot.delay, 0, 500 );
+			zui::checkbox( "predictive##trg", cfg.triggerbot.predictive );
 		}
+
+		zui::end_group_box( );
+	}
+
+	( void )avail_h;
+}
+
+class dev_logger {
+public:
+	static dev_logger& get( ) {
+		static dev_logger instance;
+		return instance;
+	}
+
+	void init( ) {
+		if ( m_file.is_open( ) )
+			return;
+
+		const auto now = std::chrono::system_clock::now( );
+		const auto time_t = std::chrono::system_clock::to_time_t( now );
+		std::tm tm{};
+		localtime_s( &tm, &time_t );
+
+		char buf[ 64 ];
+		strftime( buf, sizeof( buf ), "%Y%m%d_%H%M%S", &tm );
+		m_filename = std::format( "velora_dev_{}.log", buf );
+
+		m_file.open( m_filename, std::ios::out | std::ios::trunc );
+		if ( m_file.is_open( ) ) {
+			log( "Dev logger initialized" );
+		}
+	}
+
+	void log( const char* msg ) {
+		if ( !m_file.is_open( ) )
+			return;
+
+		const auto now = std::chrono::system_clock::now( );
+		const auto time_t = std::chrono::system_clock::to_time_t( now );
+		std::tm tm{};
+		localtime_s( &tm, &time_t );
+
+		char buf[ 64 ];
+		strftime( buf, sizeof( buf ), "%H:%M:%S", &tm );
+
+		m_file << "[" << buf << "] " << msg << "\n";
+		m_file.flush( );
+	}
+
+	void log_format( const char* fmt, ... ) {
+		if ( !m_file.is_open( ) )
+			return;
+
+		char buffer[ 1024 ];
+		va_list args;
+		va_start( args, fmt );
+		vsnprintf( buffer, sizeof( buffer ), fmt, args );
+		va_end( args );
+
+		log( buffer );
+	}
+
+	[[nodiscard]] bool is_enabled( ) const { return m_enabled; }
+	void set_enabled( bool enabled ) { m_enabled = enabled; }
+	[[nodiscard]] const std::string& filename( ) const { return m_filename; }
+
+private:
+	dev_logger( ) = default;
+	~dev_logger( ) {
+		if ( m_file.is_open( ) )
+			m_file.close( );
+	}
+
+	bool m_enabled{ false };
+	std::ofstream m_file;
+	std::string m_filename;
+};
+
+void menu::draw_dev( ) {
+	const auto [avail_w, avail_h] = zui::get_content_region_avail( );
+	const auto col_w = avail_w - 8.0f;
+
+	if ( zui::begin_group_box( "performance", col_w ) ) {
+		zui::checkbox( "perf overlay##dev", settings::g_misc.perf_overlay );
+		zui::checkbox( "log to file##dev", settings::g_misc.dev_logging );
+		zui::text_colored( std::format( "log file: {}", dev_logger::get( ).filename( ).empty( ) ? "not initialized" : dev_logger::get( ).filename( ) ), zdraw::rgba{ 170, 150, 182, 255 } );
+
 		zui::end_group_box( );
 	}
 
 	zui::same_line( );
 
-	if ( zui::begin_group_box( "profile scope", col_w ) )
-	{
-		zui::checkbox( "pistol profile##scope", settings::g_combat.groups[ 0 ].aimbot.enabled );
-		zui::checkbox( "smg profile##scope", settings::g_combat.groups[ 1 ].aimbot.enabled );
-		zui::checkbox( "rifle profile##scope", settings::g_combat.groups[ 2 ].aimbot.enabled );
-		zui::checkbox( "shotgun profile##scope", settings::g_combat.groups[ 3 ].aimbot.enabled );
-		zui::checkbox( "sniper profile##scope", settings::g_combat.groups[ 4 ].aimbot.enabled );
-		zui::checkbox( "lmg profile##scope", settings::g_combat.groups[ 5 ].aimbot.enabled );
+	if ( zui::begin_group_box( "logging", col_w ) ) {
+		if ( zui::button( "init logger", col_w - 16.0f, 28.0f ) ) {
+			dev_logger::get( ).init( );
+		}
+		if ( zui::button( "test log", col_w - 16.0f, 28.0f ) ) {
+			dev_logger::get( ).log( "Test log entry" );
+			dev_logger::get( ).log_format( "FPS: %d, FrameTime: %.2fms", perf::profiler::get( ).current_fps( ), perf::profiler::get( ).current_frame_ms( ) );
+		}
+
 		zui::end_group_box( );
 	}
 }
@@ -309,13 +418,67 @@ void menu::draw_combat( )
 void menu::draw_esp( )
 {
 	const auto [avail_w, avail_h] = zui::get_content_region_avail( );
-	const auto col_w = ( avail_w - 8.0f ) * 0.5f;
 	auto& p = settings::g_esp.m_player;
 	auto& it = settings::g_esp.m_item;
 	auto& pr = settings::g_esp.m_projectile;
 
-	if ( zui::begin_group_box( "player", col_w ) )
+	const auto nav_w = ( avail_w - 16.0f ) / 3.0f;
+	if ( this->m_esp_panel == esp_panel::player )
 	{
+		zui::push_style_color( zui::style_color::button_border, zdraw::rgba{ 182, 118, 203, 255 } );
+	}
+	if ( zui::button( "player", nav_w, 30.0f ) )
+	{
+		this->m_esp_panel = esp_panel::player;
+	}
+	if ( this->m_esp_panel == esp_panel::player )
+	{
+		zui::pop_style_color( );
+	}
+
+	zui::same_line( );
+
+	if ( this->m_esp_panel == esp_panel::items )
+	{
+		zui::push_style_color( zui::style_color::button_border, zdraw::rgba{ 182, 118, 203, 255 } );
+	}
+	if ( zui::button( "items", nav_w, 30.0f ) )
+	{
+		this->m_esp_panel = esp_panel::items;
+	}
+	if ( this->m_esp_panel == esp_panel::items )
+	{
+		zui::pop_style_color( );
+	}
+
+	zui::same_line( );
+
+	if ( this->m_esp_panel == esp_panel::projectiles )
+	{
+		zui::push_style_color( zui::style_color::button_border, zdraw::rgba{ 182, 118, 203, 255 } );
+	}
+	if ( zui::button( "projectiles", nav_w, 30.0f ) )
+	{
+		this->m_esp_panel = esp_panel::projectiles;
+	}
+	if ( this->m_esp_panel == esp_panel::projectiles )
+	{
+		zui::pop_style_color( );
+	}
+
+	zui::new_line( );
+	zui::spacing( 6.0f );
+
+	const auto [body_w, body_h] = zui::get_content_region_avail( );
+	( void )body_h;
+
+	auto draw_player_core = [ & ]( float width )
+	{
+		if ( !zui::begin_group_box( "player core", width ) )
+		{
+			return;
+		}
+
 		zui::checkbox( "enabled##pl", p.enabled );
 
 		zui::checkbox( "box##bx", p.m_box.enabled );
@@ -346,89 +509,13 @@ void menu::draw_esp( )
 			zui::color_picker( "occluded##sk", p.m_skeleton.occluded_color );
 		}
 
-		if ( p.enabled )
+		zui::checkbox( "hitboxes##hbxs", p.m_hitboxes.enabled );
+		if ( p.m_hitboxes.enabled )
 		{
-			zui::checkbox( "health bar##hb", p.m_health_bar.enabled );
-			if ( p.m_health_bar.enabled )
-			{
-				constexpr const char* hb_positions[ ]{ "left", "top", "bottom" };
-				auto hbp = static_cast< int >( p.m_health_bar.position );
-				if ( zui::combo( "position##hb", hbp, hb_positions, 3 ) )
-				{
-					p.m_health_bar.position = static_cast< settings::esp::player::health_bar::position_type >( hbp );
-				}
-				zui::checkbox( "outline##hb", p.m_health_bar.outline );
-				zui::checkbox( "gradient##hb", p.m_health_bar.gradient );
-				zui::checkbox( "show value##hb", p.m_health_bar.show_value );
-				zui::color_picker( "full##hb", p.m_health_bar.full_color );
-				zui::color_picker( "low##hb", p.m_health_bar.low_color );
-				zui::color_picker( "background##hb", p.m_health_bar.background_color );
-				zui::color_picker( "outline color##hb", p.m_health_bar.outline_color );
-				zui::color_picker( "text color##hb", p.m_health_bar.text_color );
-			}
-
-			zui::checkbox( "ammo bar##amb", p.m_ammo_bar.enabled );
-			if ( p.m_ammo_bar.enabled )
-			{
-				constexpr const char* amb_positions[ ]{ "left", "top", "bottom" };
-				auto abp = static_cast< int >( p.m_ammo_bar.position );
-				if ( zui::combo( "position##amb", abp, amb_positions, 3 ) )
-				{
-					p.m_ammo_bar.position = static_cast< settings::esp::player::ammo_bar::position_type >( abp );
-				}
-				zui::checkbox( "outline##amb", p.m_ammo_bar.outline );
-				zui::checkbox( "gradient##amb", p.m_ammo_bar.gradient );
-				zui::checkbox( "show value##amb", p.m_ammo_bar.show_value );
-				zui::color_picker( "full##amb", p.m_ammo_bar.full_color );
-				zui::color_picker( "low##amb", p.m_ammo_bar.low_color );
-				zui::color_picker( "background##amb", p.m_ammo_bar.background_color );
-				zui::color_picker( "outline color##amb", p.m_ammo_bar.outline_color );
-				zui::color_picker( "text color##amb", p.m_ammo_bar.text_color );
-			}
-
-			zui::checkbox( "info flags##if", p.m_info_flags.enabled );
-			if ( p.m_info_flags.enabled )
-			{
-				constexpr const char* flag_names[ ]{ "money", "armor", "kit", "scoped", "defusing", "flashed", "ping", "distance" };
-				constexpr settings::esp::player::info_flags::flag flag_values[ ]
-				{
-					settings::esp::player::info_flags::money,
-					settings::esp::player::info_flags::armor,
-					settings::esp::player::info_flags::kit,
-					settings::esp::player::info_flags::scoped,
-					settings::esp::player::info_flags::defusing,
-					settings::esp::player::info_flags::flashed,
-					settings::esp::player::info_flags::ping,
-					settings::esp::player::info_flags::distance
-				};
-
-				bool selected[ 8 ]
-				{
-					p.m_info_flags.has( flag_values[ 0 ] ), p.m_info_flags.has( flag_values[ 1 ] ),
-					p.m_info_flags.has( flag_values[ 2 ] ), p.m_info_flags.has( flag_values[ 3 ] ),
-					p.m_info_flags.has( flag_values[ 4 ] ), p.m_info_flags.has( flag_values[ 5 ] ),
-					p.m_info_flags.has( flag_values[ 6 ] ), p.m_info_flags.has( flag_values[ 7 ] )
-				};
-
-				zui::multicombo( "flags##if", selected, flag_names, 8 );
-
-				p.m_info_flags.flags = settings::esp::player::info_flags::none;
-				for ( int i = 0; i < 8; ++i )
-				{
-					if ( selected[ i ] )
-					{
-						p.m_info_flags.flags |= flag_values[ i ];
-					}
-				}
-
-				zui::color_picker( "money##if", p.m_info_flags.money_color );
-				zui::color_picker( "armor##if", p.m_info_flags.armor_color );
-				zui::color_picker( "kit##if", p.m_info_flags.kit_color );
-				zui::color_picker( "scoped##if", p.m_info_flags.scoped_color );
-				zui::color_picker( "defusing##if", p.m_info_flags.defusing_color );
-				zui::color_picker( "flashed##if", p.m_info_flags.flashed_color );
-				zui::color_picker( "distance##if", p.m_info_flags.distance_color );
-			}
+			zui::checkbox( "fill##hbxs", p.m_hitboxes.fill );
+			zui::checkbox( "outline##hbxs", p.m_hitboxes.outline );
+			zui::color_picker( "visible##hbxs", p.m_hitboxes.visible_color );
+			zui::color_picker( "occluded##hbxs", p.m_hitboxes.occluded_color );
 		}
 
 		zui::checkbox( "name##nm", p.m_name.enabled );
@@ -451,87 +538,117 @@ void menu::draw_esp( )
 		}
 
 		zui::end_group_box( );
-	}
+	};
 
-	zui::same_line( );
-
-	if ( zui::begin_group_box( "quick setup", col_w ) )
+	auto draw_player_bars = [ & ]( float width )
 	{
-		if ( zui::button( "minimal", ( col_w - 24.0f ) * 0.5f, 28.0f ) )
+		if ( !zui::begin_group_box( "bars", width ) )
 		{
-			p.enabled = true;
-			p.m_box.enabled = true;
-			p.m_skeleton.enabled = false;
-			p.m_health_bar.enabled = true;
-			p.m_ammo_bar.enabled = false;
-			p.m_name.enabled = true;
-			p.m_weapon.enabled = false;
-			p.m_info_flags.enabled = false;
-			pr.enabled = false;
-			it.enabled = false;
+			return;
 		}
 
-		zui::same_line( );
-
-		if ( zui::button( "balanced", ( col_w - 24.0f ) * 0.5f, 28.0f ) )
+		zui::checkbox( "health bar##hb", p.m_health_bar.enabled );
+		if ( p.m_health_bar.enabled )
 		{
-			p.enabled = true;
-			p.m_box.enabled = true;
-			p.m_skeleton.enabled = true;
-			p.m_health_bar.enabled = true;
-			p.m_ammo_bar.enabled = true;
-			p.m_name.enabled = true;
-			p.m_weapon.enabled = true;
-			p.m_info_flags.enabled = true;
-			p.m_info_flags.flags = settings::esp::player::info_flags::money | settings::esp::player::info_flags::armor | settings::esp::player::info_flags::scoped | settings::esp::player::info_flags::ping;
-			pr.enabled = true;
-			it.enabled = true;
+			constexpr const char* hb_positions[ ]{ "left", "top", "bottom" };
+			auto hbp = static_cast< int >( p.m_health_bar.position );
+			if ( zui::combo( "position##hb", hbp, hb_positions, 3 ) )
+			{
+				p.m_health_bar.position = static_cast< settings::esp::player::health_bar::position_type >( hbp );
+			}
+			zui::checkbox( "outline##hb", p.m_health_bar.outline );
+			zui::checkbox( "gradient##hb", p.m_health_bar.gradient );
+			zui::checkbox( "show value##hb", p.m_health_bar.show_value );
+			zui::color_picker( "full##hb", p.m_health_bar.full_color );
+			zui::color_picker( "low##hb", p.m_health_bar.low_color );
+			zui::color_picker( "background##hb", p.m_health_bar.background_color );
+			zui::color_picker( "outline color##hb", p.m_health_bar.outline_color );
+			zui::color_picker( "text color##hb", p.m_health_bar.text_color );
 		}
 
-		if ( zui::button( "full", col_w - 16.0f, 28.0f ) )
+		zui::checkbox( "ammo bar##amb", p.m_ammo_bar.enabled );
+		if ( p.m_ammo_bar.enabled )
 		{
-			p.enabled = true;
-			p.m_box.enabled = true;
-			p.m_skeleton.enabled = true;
-			p.m_health_bar.enabled = true;
-			p.m_ammo_bar.enabled = true;
-			p.m_name.enabled = true;
-			p.m_weapon.enabled = true;
-			p.m_info_flags.enabled = true;
-			p.m_info_flags.flags = settings::esp::player::info_flags::money | settings::esp::player::info_flags::armor | settings::esp::player::info_flags::kit | settings::esp::player::info_flags::scoped | settings::esp::player::info_flags::defusing | settings::esp::player::info_flags::flashed | settings::esp::player::info_flags::ping | settings::esp::player::info_flags::distance;
-			pr.enabled = true;
-			it.enabled = true;
+			constexpr const char* amb_positions[ ]{ "left", "top", "bottom" };
+			auto abp = static_cast< int >( p.m_ammo_bar.position );
+			if ( zui::combo( "position##amb", abp, amb_positions, 3 ) )
+			{
+				p.m_ammo_bar.position = static_cast< settings::esp::player::ammo_bar::position_type >( abp );
+			}
+			zui::checkbox( "outline##amb", p.m_ammo_bar.outline );
+			zui::checkbox( "gradient##amb", p.m_ammo_bar.gradient );
+			zui::checkbox( "show value##amb", p.m_ammo_bar.show_value );
+			zui::color_picker( "full##amb", p.m_ammo_bar.full_color );
+			zui::color_picker( "low##amb", p.m_ammo_bar.low_color );
+			zui::color_picker( "background##amb", p.m_ammo_bar.background_color );
+			zui::color_picker( "outline color##amb", p.m_ammo_bar.outline_color );
+			zui::color_picker( "text color##amb", p.m_ammo_bar.text_color );
 		}
 
 		zui::end_group_box( );
-	}
+	};
 
-	if ( zui::begin_group_box( "projectiles", col_w ) )
+	auto draw_player_flags = [ & ]( float width )
 	{
-		zui::checkbox( "enabled##pr", pr.enabled );
-		if ( pr.enabled )
+		if ( !zui::begin_group_box( "info flags", width ) )
 		{
-			zui::checkbox( "icon##pr", pr.show_icon );
-			zui::checkbox( "name##pr", pr.show_name );
-			zui::checkbox( "timer bar##pr", pr.show_timer_bar );
-			zui::checkbox( "inferno bounds##pr", pr.show_inferno_bounds );
+			return;
+		}
 
-			zui::color_picker( "default##pr", pr.default_color );
-			zui::color_picker( "he##pr", pr.color_he );
-			zui::color_picker( "flash##pr", pr.color_flash );
-			zui::color_picker( "smoke##pr", pr.color_smoke );
-			zui::color_picker( "molotov##pr", pr.color_molotov );
-			zui::color_picker( "decoy##pr", pr.color_decoy );
-			zui::color_picker( "timer high##pr", pr.timer_high_color );
-			zui::color_picker( "timer low##pr", pr.timer_low_color );
-			zui::color_picker( "bar background##pr", pr.bar_background );
+		zui::checkbox( "enabled##if", p.m_info_flags.enabled );
+		if ( p.m_info_flags.enabled )
+		{
+			constexpr const char* flag_names[ ]{ "money", "armor", "kit", "scoped", "defusing", "flashed", "ping", "distance" };
+			constexpr settings::esp::player::info_flags::flag flag_values[ ]
+			{
+				settings::esp::player::info_flags::money,
+				settings::esp::player::info_flags::armor,
+				settings::esp::player::info_flags::kit,
+				settings::esp::player::info_flags::scoped,
+				settings::esp::player::info_flags::defusing,
+				settings::esp::player::info_flags::flashed,
+				settings::esp::player::info_flags::ping,
+				settings::esp::player::info_flags::distance
+			};
+
+			bool selected[ 8 ]
+			{
+				p.m_info_flags.has( flag_values[ 0 ] ), p.m_info_flags.has( flag_values[ 1 ] ),
+				p.m_info_flags.has( flag_values[ 2 ] ), p.m_info_flags.has( flag_values[ 3 ] ),
+				p.m_info_flags.has( flag_values[ 4 ] ), p.m_info_flags.has( flag_values[ 5 ] ),
+				p.m_info_flags.has( flag_values[ 6 ] ), p.m_info_flags.has( flag_values[ 7 ] )
+			};
+
+			zui::multicombo( "flags##if", selected, flag_names, 8 );
+
+			p.m_info_flags.flags = settings::esp::player::info_flags::none;
+			for ( int i = 0; i < 8; ++i )
+			{
+				if ( selected[ i ] )
+				{
+					p.m_info_flags.flags |= flag_values[ i ];
+				}
+			}
+
+			zui::color_picker( "money##if", p.m_info_flags.money_color );
+			zui::color_picker( "armor##if", p.m_info_flags.armor_color );
+			zui::color_picker( "kit##if", p.m_info_flags.kit_color );
+			zui::color_picker( "scoped##if", p.m_info_flags.scoped_color );
+			zui::color_picker( "defusing##if", p.m_info_flags.defusing_color );
+			zui::color_picker( "flashed##if", p.m_info_flags.flashed_color );
+			zui::color_picker( "distance##if", p.m_info_flags.distance_color );
 		}
 
 		zui::end_group_box( );
-	}
+	};
 
-	if ( zui::begin_group_box( "items", col_w ) )
+	auto draw_items = [ & ]( float width )
 	{
+		if ( !zui::begin_group_box( "items", width ) )
+		{
+			return;
+		}
+
 		zui::checkbox( "enabled##it", it.enabled );
 		if ( it.enabled )
 		{
@@ -573,8 +690,54 @@ void menu::draw_esp( )
 		f.utility = filter_selected[ 7 ];
 
 		zui::end_group_box( );
-	}
+	};
 
+	auto draw_projectiles = [ & ]( float width )
+	{
+		if ( !zui::begin_group_box( "projectiles", width ) )
+		{
+			return;
+		}
+
+		zui::checkbox( "enabled##pr", pr.enabled );
+		if ( pr.enabled )
+		{
+			zui::checkbox( "icon##pr", pr.show_icon );
+			zui::checkbox( "name##pr", pr.show_name );
+			zui::checkbox( "timer bar##pr", pr.show_timer_bar );
+			zui::checkbox( "inferno bounds##pr", pr.show_inferno_bounds );
+
+			zui::color_picker( "default##pr", pr.default_color );
+			zui::color_picker( "he##pr", pr.color_he );
+			zui::color_picker( "flash##pr", pr.color_flash );
+			zui::color_picker( "smoke##pr", pr.color_smoke );
+			zui::color_picker( "molotov##pr", pr.color_molotov );
+			zui::color_picker( "decoy##pr", pr.color_decoy );
+			zui::color_picker( "timer high##pr", pr.timer_high_color );
+			zui::color_picker( "timer low##pr", pr.timer_low_color );
+			zui::color_picker( "bar background##pr", pr.bar_background );
+		}
+
+		zui::end_group_box( );
+	};
+
+	if ( this->m_esp_panel == esp_panel::player )
+	{
+		const auto col_w = ( body_w - 8.0f ) * 0.5f;
+		draw_player_core( col_w );
+		zui::same_line( );
+		draw_player_bars( col_w );
+		zui::new_line( );
+		draw_player_flags( body_w );
+	}
+	else if ( this->m_esp_panel == esp_panel::items )
+	{
+		draw_items( body_w );
+	}
+	else
+	{
+		draw_projectiles( body_w );
+	}
 }
 
 void menu::draw_misc( )
@@ -598,7 +761,9 @@ void menu::draw_misc( )
 
 	if ( zui::begin_group_box( "performance", col_w ) )
 	{
+		zui::checkbox( "spectator warning##perf", settings::g_misc.spectator_warning );
 		zui::checkbox( "watermark##perf", settings::g_misc.watermark );
+		zui::checkbox( "perf overlay##perf", settings::g_misc.perf_overlay );
 		zui::checkbox( "limit fps##fps", settings::g_misc.limit_fps );
 		zui::slider_int( "fps cap##fps", settings::g_misc.fps_limit, 60, 1000 );
 

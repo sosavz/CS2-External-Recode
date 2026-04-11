@@ -78,7 +78,6 @@
     <ClCompile Include="project\core\features\impl\esp\player.cpp" />
     <ClCompile Include="project\core\features\impl\esp\projectile.cpp" />
     <ClCompile Include="project\core\features\impl\misc\grenades.cpp" />
-    <ClCompile Include="project\core\features\impl\misc\impacts.cpp" />
     <ClCompile Include="project\core\menu\menu.cpp" />
     <ClCompile Include="project\core\config\config.cpp" />
     <ClCompile Include="project\core\systems\impl\bones.cpp" />
@@ -194,6 +193,7 @@
     <ClInclude Include="project\utils\math\math.hpp" />
     <ClInclude Include="project\utils\diagnostics\diagnostics.hpp" />
     <ClInclude Include="project\utils\fnv1a.hpp" />
+    <ClInclude Include="project\utils\logger\logger.hpp" />
     <ClInclude Include="project\core\settings.hpp" />
     <ClInclude Include="project\core\render\render.hpp" />
     <ClInclude Include="project\core\threads\threads.hpp" />
